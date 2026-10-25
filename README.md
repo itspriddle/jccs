@@ -6,11 +6,24 @@ Claude Code statuslines are a dime a dozen. This one is mine. Use it or don't.
 
 ## Install
 
+With Homebrew:
+
+```sh
+brew install itspriddle/brews/jccs
+```
+
+Or manually:
+
 ```sh
 git clone https://github.com/itspriddle/jccs
 cd jccs
 make build
 sudo make install
+```
+
+Setup Claude Code:
+
+```
 jccs install
 $EDITOR ~/.config/jccs/config.toml
 ```
