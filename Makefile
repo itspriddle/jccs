@@ -1,9 +1,17 @@
+# This Makefile is just for local development. Not for CI use!
+
 SHELL := /bin/bash
 PREFIX ?= /usr/local
 
 .DEFAULT_GOAL := help
 
 CARGO := cargo
+
+# Cross-link to musl Linux from macOS with the rustup-bundled linker (pure Rust deps only)
+ifeq ($(shell uname -s),Darwin)
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER := rust-lld
+export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER := rust-lld
+endif
 
 ##@ Quality
 
