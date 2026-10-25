@@ -45,6 +45,13 @@ enum Command {
         #[arg(long, value_name = "PATH")]
         config: Option<PathBuf>,
     },
+    /// Write a documented config file, with every option set to its
+    /// default, to `~/.config/jccs/config.toml`.
+    Configure {
+        /// Overwrite an existing config file.
+        #[arg(short, long)]
+        force: bool,
+    },
 }
 
 #[derive(Args)]
@@ -66,6 +73,7 @@ fn main() -> ExitCode {
         None => render(cli.render),
         Some(Command::Render(args)) => render(args),
         Some(Command::Vars { config }) => print_vars(config.as_deref()),
+        Some(Command::Configure { force }) => configure(force),
     };
 
     match result {
@@ -102,6 +110,14 @@ fn print_vars(config_path: Option<&Path>) -> Result<()> {
     for (name, value) in read_status(&config)?.vars() {
         println!("{name} = {value}");
     }
+    Ok(())
+}
+
+fn configure(force: bool) -> Result<()> {
+    let path = config::config_path()
+        .context("cannot determine config directory; set HOME or XDG_CONFIG_HOME")?;
+    config::write_template(&path, force)?;
+    println!("wrote {}", path.display());
     Ok(())
 }
 

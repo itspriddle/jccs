@@ -1,6 +1,8 @@
 use std::{
     collections::BTreeMap,
-    env, fs, io,
+    env,
+    fs::{self, OpenOptions},
+    io::{self, Write as _},
     path::{Path, PathBuf},
 };
 
@@ -12,6 +14,9 @@ use crate::{
     template::{self, Scope, Template},
     vars::Vars,
 };
+
+/// A fully documented config that renders the same line as the defaults.
+pub const TEMPLATE: &str = include_str!("../config.example.toml");
 
 /// User configuration loaded from `~/.config/jccs/config.toml`.
 #[derive(Debug, Deserialize)]
@@ -255,6 +260,33 @@ fn parse(contents: &str) -> Result<Config> {
     Ok(toml::from_str(contents)?)
 }
 
+/// Writes [`TEMPLATE`] to `path`, creating parent directories. Refuses to
+/// replace an existing file unless `force` is set.
+pub fn write_template(path: &Path, force: bool) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    }
+
+    if force {
+        return fs::write(path, TEMPLATE).with_context(|| format!("writing {}", path.display()));
+    }
+
+    // `create_new` fails atomically if the file exists, so there's no window
+    // between checking and writing.
+    let mut file = match OpenOptions::new().write(true).create_new(true).open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+            bail!(
+                "{} already exists; pass --force to overwrite",
+                path.display()
+            )
+        }
+        Err(err) => return Err(err).with_context(|| format!("creating {}", path.display())),
+    };
+    file.write_all(TEMPLATE.as_bytes())
+        .with_context(|| format!("writing {}", path.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,6 +409,83 @@ mod tests {
         };
         assert!(format!("{err:#}").contains("segments[1]"));
         Ok(())
+    }
+
+    /// A value for every name, so every default segment renders.
+    fn all_vars() -> Vars {
+        use crate::{status::Level, vars::NAMES};
+
+        NAMES
+            .iter()
+            .map(|&name| {
+                let value = match name {
+                    "thinking.enabled" => Value::Bool(true),
+                    "context.level" => Value::Level(Level::Caution),
+                    "cost.total_usd" => Value::Usd(1.23),
+                    n if n.ends_with("_pct") => Value::Percent(42.0),
+                    n if n.ends_with("_in") => Value::Duration(3_900),
+                    _ => Value::Text(name.to_owned()),
+                };
+                (name, value)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn template_matches_defaults() -> Result<()> {
+        let full = all_vars();
+        let sparse: Vars = full
+            .iter()
+            .filter(|(name, _)| !name.starts_with("git.") && !name.starts_with("cost."))
+            .map(|(name, value)| match *name {
+                "thinking.enabled" => (*name, Value::Bool(false)),
+                _ => (*name, value.clone()),
+            })
+            .collect();
+
+        for mode in ["256", "none"] {
+            let mode_line = format!("color_mode = \"{mode}\"\n");
+            let template = TEMPLATE.replace("color_mode = \"truecolor\"\n", &mode_line);
+            let template = parse(&template)?.compile()?;
+            let defaults = parse(&mode_line)?.compile()?;
+
+            for vars in [&full, &sparse, &Vars::new()] {
+                assert_eq!(template.render(vars), defaults.render(vars), "mode {mode}");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn template_documents_every_value() {
+        for name in crate::vars::NAMES {
+            assert!(TEMPLATE.contains(name), "{name} is not documented");
+        }
+    }
+
+    #[test]
+    fn write_template_refuses_overwrite() -> Result<()> {
+        let dir = env::temp_dir().join(format!("jccs-test-{}", std::process::id()));
+        let path = dir.join("nested").join("config.toml");
+
+        let result = (|| -> Result<()> {
+            write_template(&path, false)?;
+            assert_eq!(fs::read_to_string(&path)?, TEMPLATE);
+
+            fs::write(&path, "edited")?;
+            let Err(err) = write_template(&path, false) else {
+                bail!("expected an error");
+            };
+            assert!(format!("{err:#}").contains("--force"));
+            assert_eq!(fs::read_to_string(&path)?, "edited");
+
+            write_template(&path, true)?;
+            assert_eq!(fs::read_to_string(&path)?, TEMPLATE);
+            Ok(())
+        })();
+
+        fs::remove_dir_all(&dir)?;
+        result
     }
 
     #[test]

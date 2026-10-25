@@ -1,0 +1,153 @@
+# jccs - Josh's Claude Code Statusline
+#
+# Every option is listed below with its default value, so this file renders
+# the same statusline as having no config at all (colors use Solarized Dark;
+# see [colors]). Edit anything you like.
+#
+# Location: $XDG_CONFIG_HOME/jccs/config.toml, or ~/.config/jccs/config.toml
+# Generate: jccs configure (pass --force to overwrite an existing file)
+#
+# Try changes without touching Claude Code:
+#
+#   jccs vars                        # list every value and its current output
+#   jccs --config ./test.toml        # render with another config file
+#   jccs --format '[bold]{model.name}[/]'  # render one ad-hoc template
+#   jccs --color-mode none           # disable colors for this run
+#
+# Pipe a statusline payload in to see real values, e.g.
+#   jccs < payload.json
+#
+# ---------------------------------------------------------------------------
+# Templates
+# ---------------------------------------------------------------------------
+#
+# `separator` and each entry in `segments` is a template:
+#
+#   {model.name}         insert a value (see "Values" below). If the value is
+#                        missing, the whole segment is dropped.
+#   {icon.branch}        insert an entry from [icons]
+#   [bold red]...[/]     apply a style until the matching [/]; styles nest
+#   [on #073642]...[/]   set a background color
+#   [$context.level]     color with the [colors] entry named by a value,
+#                        e.g. `good`, `caution`, or `danger`
+#   {{ }} [[ ]]          literal braces and brackets
+#
+# A style is space-separated words:
+#
+#   modifiers   bold dim italic underline reverse strike
+#   colors      a [colors] name, a built-in name (black red green yellow blue
+#               magenta cyan white, and bright_* of each), "#rrggbb", or an
+#               ANSI index 0-255
+#   background  `on <color>`
+#
+# Example: "[bold yellow on base02]{icon.clock} {rate.five_hour.resets_in}[/]"
+#
+# ---------------------------------------------------------------------------
+# Values
+# ---------------------------------------------------------------------------
+#
+#   model.name                       text        Opus
+#   effort.level                     text        high
+#   thinking.enabled                 bool        true
+#   cost.total_usd                   dollars     $1.23
+#   lines.added                      integer     156
+#   lines.removed                    integer     23
+#
+#   rate.five_hour.used_pct          percent     42.0%
+#   rate.five_hour.remaining_pct     percent     58.0%
+#   rate.five_hour.starts_at         unix time   1767225600
+#   rate.five_hour.resets_at         unix time   1767243600
+#   rate.five_hour.resets_in         duration    2h 15m
+#   rate.seven_day.used_pct          percent     12.5%
+#   rate.seven_day.remaining_pct     percent     87.5%
+#   rate.seven_day.starts_at         unix time   1766880000
+#   rate.seven_day.resets_at         unix time   1767484800
+#   rate.seven_day.resets_in         duration    3d 4h
+#
+#   context.size                     integer     200000
+#   context.reserved_tokens          integer     20000
+#   context.used_tokens              integer     90000
+#   context.used_pct                 percent     50.0%   (of size - reserved)
+#   context.remaining_pct            percent     50.0%
+#   context.level                    level       good, caution, or danger
+#   context.reported_used_pct        percent     45.0%   (as Claude Code reports)
+#   context.reported_remaining_pct   percent     55.0%
+#
+#   git.branch                       text        main
+#   git.owner                        text        itspriddle
+#   git.repo                         text        jccs
+#   git.pr.number                    integer     3
+#   git.pr.url                       text        https://github.com/...
+
+# How colors are written:
+#
+#   "truecolor"  24-bit colors; entries without an rgb use their ANSI index
+#   "256"        ANSI index when set, otherwise the nearest 256-color match
+#   "none"       no colors or styles
+#
+# NO_COLOR=1 in the environment acts like "none"; --color-mode overrides both.
+color_mode = "truecolor"
+
+# Placed between rendered segments. It may use styles and icons, not values.
+separator = " [dim]│[/] "
+
+# Rendered left to right; segments with missing values are skipped. A segment
+# is either a template string or `{ format = "...", when = "<value>" }`, which
+# is shown only when that value is present and not false.
+segments = [
+  "[bold]{model.name}[/]",
+  "[cyan]{icon.branch} {git.branch}[/]",
+  "[$context.level]{icon.context} {context.used_pct}[/]",
+  "{icon.clock} {rate.five_hour.used_pct}",
+  "{cost.total_usd}",
+  { format = "[yellow]{icon.thinking}[/]", when = "thinking.enabled" },
+]
+
+# Referenced as {icon.<name>}. Add your own (Nerd Font glyphs work too); set
+# one to "" to blank it out.
+[icons]
+branch = "⎇"
+clock = "↻"
+context = "◔"
+thinking = "✻"
+
+# Named colors for styles and [$value] lookups. Each entry is "#rrggbb", an
+# ANSI index like "3", a built-in name like "yellow", or
+# `{ rgb = "#rrggbb", ansi = N }` to pick per color_mode. Entries here can
+# replace built-in names, but cannot refer to other entries in this table.
+#
+# The `ansi` indexes match a terminal using the Solarized palette, so "256"
+# mode matches truecolor there and follows your theme everywhere else.
+[colors]
+# Solarized Dark palette.
+base03 = { rgb = "#002b36", ansi = 8 }   # background
+base02 = { rgb = "#073642", ansi = 0 }   # background highlights
+base01 = { rgb = "#586e75", ansi = 10 }  # comments / secondary content
+base00 = { rgb = "#657b83", ansi = 11 }
+base0 = { rgb = "#839496", ansi = 12 }   # body text
+base1 = { rgb = "#93a1a1", ansi = 14 }   # emphasized content
+base2 = { rgb = "#eee8d5", ansi = 7 }
+base3 = { rgb = "#fdf6e3", ansi = 15 }
+yellow = { rgb = "#b58900", ansi = 3 }
+orange = { rgb = "#cb4b16", ansi = 9 }
+red = { rgb = "#dc322f", ansi = 1 }
+magenta = { rgb = "#d33682", ansi = 5 }
+violet = { rgb = "#6c71c4", ansi = 13 }
+blue = { rgb = "#268bd2", ansi = 4 }
+cyan = { rgb = "#2aa198", ansi = 6 }
+green = { rgb = "#859900", ansi = 2 }
+
+# Used by [$context.level].
+good = { rgb = "#859900", ansi = 2 }     # green
+caution = { rgb = "#b58900", ansi = 3 }  # yellow
+danger = { rgb = "#dc322f", ansi = 1 }   # red
+
+# Context window accounting.
+[context]
+# Tokens Claude Code holds back for output that the JSON payload doesn't
+# include. context.used_pct is measured against (size - reserved_tokens).
+reserved_tokens = 20000
+# context.used_pct at which context.level becomes "caution".
+caution_at = 76.0
+# context.used_pct at which context.level becomes "danger".
+danger_at = 86.0
