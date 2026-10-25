@@ -9,7 +9,31 @@ use serde::Deserialize;
 /// User configuration loaded from `~/.config/jccs/config.toml`.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct Config {}
+pub struct Config {
+    pub context: ContextConfig,
+}
+
+/// Context window accounting and status thresholds.
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ContextConfig {
+    /// Tokens Claude Code reserves that are not reported in the JSON payload.
+    pub reserved_tokens: u64,
+    /// Used percentage at which the context status becomes "caution".
+    pub caution_at: f64,
+    /// Used percentage at which the context status becomes "danger".
+    pub danger_at: f64,
+}
+
+impl Default for ContextConfig {
+    fn default() -> Self {
+        Self {
+            reserved_tokens: 20_000,
+            caution_at: 76.0,
+            danger_at: 86.0,
+        }
+    }
+}
 
 /// Returns `$XDG_CONFIG_HOME/jccs/config.toml`, falling back to
 /// `$HOME/.config/jccs/config.toml`.
@@ -56,6 +80,16 @@ mod tests {
     #[test]
     fn rejects_unknown_keys() {
         assert!(parse("bogus = true").is_err());
+        assert!(parse("[context]\nbogus = true").is_err());
+    }
+
+    #[test]
+    fn parses_context_table() -> Result<()> {
+        let config = parse("[context]\nreserved_tokens = 10000\ndanger_at = 90")?;
+        assert_eq!(config.context.reserved_tokens, 10_000);
+        assert!((config.context.caution_at - 76.0).abs() < f64::EPSILON);
+        assert!((config.context.danger_at - 90.0).abs() < f64::EPSILON);
+        Ok(())
     }
 
     #[test]
