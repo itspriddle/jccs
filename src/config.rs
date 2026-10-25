@@ -25,7 +25,7 @@ pub struct Config {
     pub color_mode: ColorMode,
     /// Template placed between rendered segments; may not use values.
     pub separator: String,
-    pub segments: Vec<SegmentSpec>,
+    pub segments: Segments,
     /// Merged over [`DEFAULT_ICONS`]; set an icon to `""` to remove it.
     pub icons: BTreeMap<String, String>,
     /// Merged over the built-in color names and [`DEFAULT_COLORS`].
@@ -38,14 +38,16 @@ impl Default for Config {
         Self {
             color_mode: ColorMode::default(),
             separator: DEFAULT_SEPARATOR.to_owned(),
-            segments: DEFAULT_SEGMENTS
-                .iter()
-                .map(|&s| SegmentSpec::Format(s.to_owned()))
-                .chain([SegmentSpec::When {
-                    format: "[yellow]{icon.thinking}[/]".to_owned(),
-                    when: "thinking.enabled".to_owned(),
-                }])
-                .collect(),
+            segments: Segments::Line(
+                DEFAULT_SEGMENTS
+                    .iter()
+                    .map(|&s| SegmentSpec::Format(s.to_owned()))
+                    .chain([SegmentSpec::When {
+                        format: "[yellow]{icon.thinking}[/]".to_owned(),
+                        when: "thinking.enabled".to_owned(),
+                    }])
+                    .collect(),
+            ),
             icons: BTreeMap::new(),
             colors: BTreeMap::new(),
             context: ContextConfig::default(),
@@ -77,6 +79,17 @@ const DEFAULT_COLORS: [(&str, Color); 3] = [
     ("caution", Color::ansi(3)),
     ("danger", Color::ansi(1)),
 ];
+
+/// Segments for a single line, or one array of segments per line.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(
+    untagged,
+    expecting = "an array of segments, or an array of arrays of segments (one per line)"
+)]
+pub enum Segments {
+    Lines(Vec<Vec<SegmentSpec>>),
+    Line(Vec<SegmentSpec>),
+}
 
 /// A segment: a bare template, or one shown only when `when` is truthy.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -123,18 +136,26 @@ pub struct Layout {
     mode: ColorMode,
     palette: Palette,
     separator: String,
-    segments: Vec<Segment>,
+    lines: Vec<Vec<Segment>>,
 }
 
 impl Layout {
-    /// Renders every segment whose values are present, joined by the separator.
+    /// Renders every segment whose values are present, joined by the
+    /// separator. Lines are joined by newlines; empty lines are dropped.
     pub fn render(&self, vars: &Vars) -> String {
-        self.segments
+        self.lines
             .iter()
-            .filter(|s| s.when.is_none_or(|name| template::truthy(vars, name)))
-            .filter_map(|s| s.template.render(vars, &self.palette, self.mode))
+            .map(|segments| {
+                segments
+                    .iter()
+                    .filter(|s| s.when.is_none_or(|name| template::truthy(vars, name)))
+                    .filter_map(|s| s.template.render(vars, &self.palette, self.mode))
+                    .collect::<Vec<_>>()
+                    .join(&self.separator)
+            })
+            .filter(|line| !line.is_empty())
             .collect::<Vec<_>>()
-            .join(&self.separator)
+            .join("\n")
     }
 }
 
@@ -170,30 +191,40 @@ impl Config {
             .render(&Vars::new(), &palette, self.color_mode)
             .unwrap_or_default();
 
-        let segments = self
-            .segments
-            .iter()
-            .enumerate()
-            .map(|(i, spec)| {
-                let (format, when) = match spec {
-                    SegmentSpec::Format(format) => (format, None),
-                    SegmentSpec::When { format, when } => (format, Some(when)),
-                };
-                let segment = || -> Result<Segment> {
-                    Ok(Segment {
-                        template: Template::parse(format, &scope)?,
-                        when: when.map(|w| template::var_name(w)).transpose()?,
-                    })
-                };
-                segment().with_context(|| format!("in `segments[{i}]`"))
-            })
-            .collect::<Result<_>>()?;
+        let compile_line = |specs: &[SegmentSpec], path: &dyn Fn(usize) -> String| {
+            specs
+                .iter()
+                .enumerate()
+                .map(|(i, spec)| {
+                    let (format, when) = match spec {
+                        SegmentSpec::Format(format) => (format, None),
+                        SegmentSpec::When { format, when } => (format, Some(when)),
+                    };
+                    let segment = || -> Result<Segment> {
+                        Ok(Segment {
+                            template: Template::parse(format, &scope)?,
+                            when: when.map(|w| template::var_name(w)).transpose()?,
+                        })
+                    };
+                    segment().with_context(|| format!("in `{}`", path(i)))
+                })
+                .collect::<Result<Vec<_>>>()
+        };
+
+        let lines = match &self.segments {
+            Segments::Line(specs) => vec![compile_line(specs, &|i| format!("segments[{i}]"))?],
+            Segments::Lines(lines) => lines
+                .iter()
+                .enumerate()
+                .map(|(l, specs)| compile_line(specs, &|i| format!("segments[{l}][{i}]")))
+                .collect::<Result<_>>()?,
+        };
 
         Ok(Layout {
             mode: self.color_mode,
             palette,
             separator,
-            segments,
+            lines,
         })
     }
 }
@@ -332,14 +363,45 @@ mod tests {
         let config = parse(r#"segments = ["a", { format = "b", when = "thinking.enabled" }]"#)?;
         assert_eq!(
             config.segments,
-            [
+            Segments::Line(vec![
                 SegmentSpec::Format("a".into()),
                 SegmentSpec::When {
                     format: "b".into(),
                     when: "thinking.enabled".into()
                 },
-            ]
+            ])
         );
+
+        let config = parse(r#"segments = [["a"], ["b", "c"]]"#)?;
+        assert_eq!(
+            config.segments,
+            Segments::Lines(vec![
+                vec![SegmentSpec::Format("a".into())],
+                vec![
+                    SegmentSpec::Format("b".into()),
+                    SegmentSpec::Format("c".into())
+                ],
+            ])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn renders_multiple_lines() -> Result<()> {
+        let toml = r#"
+            color_mode = "none"
+            separator = " | "
+            segments = [
+                ["{model.name}", "a"],
+                ["{git.branch}", { format = "T", when = "thinking.enabled" }],
+                ["b"],
+            ]
+        "#;
+        let vars = vec![("model.name", Value::Text("Opus".into()))];
+        assert_eq!(render(toml, &vars)?, "Opus | a\nb");
+
+        let vars = vec![("thinking.enabled", Value::Bool(true))];
+        assert_eq!(render(toml, &vars)?, "a\nT\nb");
         Ok(())
     }
 
@@ -391,6 +453,8 @@ mod tests {
             r#"segments = ["{nope}"]"#,
             r#"segments = ["{icon.nope}"]"#,
             r#"segments = [{ format = "x", when = "nope" }]"#,
+            r#"segments = ["a", ["b"]]"#,
+            r#"segments = [["{nope}"]]"#,
             r#"separator = "{model.name}""#,
             r#"colors.x = "blurple""#,
             r"colors.x = {}",
@@ -408,6 +472,11 @@ mod tests {
             anyhow::bail!("expected an error");
         };
         assert!(format!("{err:#}").contains("segments[1]"));
+
+        let Err(err) = parse(r#"segments = [["ok"], ["{nope}"]]"#)?.compile() else {
+            anyhow::bail!("expected an error");
+        };
+        assert!(format!("{err:#}").contains("segments[1][0]"));
         Ok(())
     }
 

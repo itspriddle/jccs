@@ -95,6 +95,14 @@ separator = " [dim]│[/] "
 # Rendered left to right; segments with missing values are skipped. A segment
 # is either a template string or `{ format = "...", when = "<value>" }`, which
 # is shown only when that value is present and not false.
+#
+# For a multi-line statusline, use one array of segments per line. Lines
+# where every segment is skipped are dropped:
+#
+#   segments = [
+#     ["[bold]{model.name}[/]", "[cyan]{icon.branch} {git.branch}[/]"],
+#     ["{icon.clock} {rate.five_hour.used_pct}", "{cost.total_usd}"],
+#   ]
 segments = [
   "[bold]{model.name}[/]",
   "[cyan]{icon.branch} {git.branch}[/]",

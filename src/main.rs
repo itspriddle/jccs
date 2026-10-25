@@ -20,7 +20,7 @@ use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 
 use crate::{
-    config::{Config, SegmentSpec},
+    config::{Config, SegmentSpec, Segments},
     input::StatusInput,
     status::{Env, Status},
     style::ColorMode,
@@ -112,7 +112,7 @@ fn render(args: RenderArgs) -> Result<()> {
     let mut config = config::load(args.config.as_deref())?;
 
     if let Some(format) = args.format {
-        config.segments = vec![SegmentSpec::Format(format)];
+        config.segments = Segments::Line(vec![SegmentSpec::Format(format)]);
     }
     if let Some(mode) = args.color_mode {
         config.color_mode = mode;
