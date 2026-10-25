@@ -96,10 +96,11 @@ separator = " [dim]│[/] "
 # is either a template string or `{ format = "...", when = "<value>" }`, which
 # is shown only when that value is present and not false.
 segments = [
-  "[bold]{model.name}[/]",
+  "[claude]{icon.claude} {model.name} {effort.level}[/]",
   "[cyan]{icon.branch} {git.branch}[/]",
+  "[bold]{icon.diff}[/] [green]+{lines.added}[/] [red]-{lines.removed}[/]",
   "[$context.level]{icon.context} {context.used_pct}[/]",
-  "{icon.clock} {rate.five_hour.used_pct}",
+  "{icon.clock} {rate.five_hour.remaining_pct} ({rate.five_hour.resets_in} left)",
   "{cost.total_usd}",
   { format = "[yellow]{icon.thinking}[/]", when = "thinking.enabled" },
 ]
@@ -108,9 +109,12 @@ segments = [
 # one to "" to blank it out.
 [icons]
 branch = "⎇"
-clock = "↻"
+clock = ""
 context = "◔"
 thinking = "✻"
+github = ""
+diff = ""
+claude = "✻"
 
 # Named colors for styles and [$value] lookups. Each entry is "#rrggbb", an
 # ANSI index like "3", a built-in name like "yellow", or
@@ -139,9 +143,12 @@ cyan = { rgb = "#2aa198", ansi = 6 }
 green = { rgb = "#859900", ansi = 2 }
 
 # Used by [$context.level].
-good = { rgb = "#859900", ansi = 2 }     # green
+good = { rgb = "#839496", ansi = 2 }     # normal
 caution = { rgb = "#b58900", ansi = 3 }  # yellow
 danger = { rgb = "#dc322f", ansi = 1 }   # red
+
+# Others
+claude = { rgb = "#de7356", ansi = 3 }
 
 # Context window accounting.
 [context]
