@@ -422,6 +422,7 @@ mod tests {
                     "thinking.enabled" => Value::Bool(true),
                     "context.level" => Value::Level(Level::Caution),
                     "cost.total_usd" => Value::Usd(1.23),
+                    "cost.today_usd" => Value::Usd(12.34),
                     n if n.ends_with("_pct") => Value::Percent(42.0),
                     n if n.ends_with("_in") => Value::Duration(3_900),
                     _ => Value::Text(name.to_owned()),

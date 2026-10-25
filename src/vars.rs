@@ -56,6 +56,7 @@ pub const NAMES: &[&str] = &[
     "effort.level",
     "thinking.enabled",
     "cost.total_usd",
+    "cost.today_usd",
     "lines.added",
     "lines.removed",
     RATE_FIVE_HOUR[0],
@@ -101,6 +102,7 @@ impl Status {
         push("thinking.enabled", self.thinking.map(Value::Bool));
 
         push("cost.total_usd", self.cost_usd.map(Value::Usd));
+        push("cost.today_usd", self.cost_today_usd.map(Value::Usd));
         push("lines.added", self.lines_added.map(Value::Int));
         push("lines.removed", self.lines_removed.map(Value::Int));
 
@@ -208,6 +210,7 @@ mod tests {
             effort: Some("high".into()),
             thinking: Some(true),
             cost_usd: Some(1.0),
+            cost_today_usd: Some(2.0),
             lines_added: Some(1),
             lines_removed: Some(1),
             five_hour: window(),

@@ -2,6 +2,7 @@ mod config;
 mod git;
 mod input;
 mod install;
+mod ledger;
 mod status;
 mod style;
 mod template;
@@ -158,9 +159,16 @@ fn read_status(config: &Config) -> Result<Status> {
         .or(input.cwd.as_deref())
         .map(Path::new);
 
+    let session = input
+        .session_id
+        .as_deref()
+        .zip(input.cost.as_ref().and_then(|c| c.total_cost_usd));
+
     let env = Env {
         now: unix_now()?,
         git_branch: git::branch(dir),
+        cost_today_usd: ledger::state_dir()
+            .and_then(|state| ledger::today_usd(&state, &ledger::today(), session)),
     };
 
     Ok(Status::from_input(&input, &env, config))
