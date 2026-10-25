@@ -15,11 +15,11 @@ lint: fmt ## Format-check and lint
 	$(CARGO) clippy --all-targets --locked -- -D warnings
 
 .PHONY: vuln
-vuln: ## Audit server dependencies: advisories, licenses and sources
+vuln: ## Audit dependencies: advisories, licenses and sources
 	$(CARGO) deny check
 
 .PHONY: fmt
-fmt: ## Format server and web sources
+fmt: ## Format code
 	$(CARGO) fmt
 
 .PHONY: test
