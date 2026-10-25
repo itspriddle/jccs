@@ -195,7 +195,7 @@ mod tests {
         vec![
             ("git.branch", Value::Text("main".into())),
             ("context.level", Value::Level(Level::Caution)),
-            ("thinking.enabled", Value::Bool(false)),
+            ("model.thinking.enabled", Value::Bool(false)),
         ]
     }
 
@@ -210,7 +210,10 @@ mod tests {
 
     #[test]
     fn missing_value_drops_template() -> Result<()> {
-        assert_eq!(render("x {model.name}", &sample(), ColorMode::None)?, None);
+        assert_eq!(
+            render("x {model.display_name}", &sample(), ColorMode::None)?,
+            None
+        );
         assert_eq!(
             render("[$cost.total_usd]x", &sample(), ColorMode::None)?,
             None
@@ -303,7 +306,7 @@ mod tests {
     fn when_is_truthy_unless_missing_or_false() {
         let vars = sample();
         assert!(truthy(&vars, "git.branch"));
-        assert!(!truthy(&vars, "thinking.enabled"));
-        assert!(!truthy(&vars, "model.name"));
+        assert!(!truthy(&vars, "model.thinking.enabled"));
+        assert!(!truthy(&vars, "model.display_name"));
     }
 }
