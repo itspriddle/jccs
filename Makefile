@@ -1,4 +1,5 @@
 SHELL := /bin/bash
+PREFIX ?= /usr/local
 
 .DEFAULT_GOAL := help
 
@@ -30,6 +31,19 @@ test: ## Run test suite
 .PHONY: release
 release: ## Build optimized release binary
 	$(CARGO) build --release
+
+##@ Setup
+
+.PHONY: install
+install: ## Install to PREFIX (/usr/local by default, requires sudo)
+	@test -x target/release/jccs || { echo "Run 'make release' first (without sudo)"; exit 1; }
+	@install -d -m 755 "$(DESTDIR)$(PREFIX)/bin"
+	@install -m 755 target/release/jccs "$(DESTDIR)$(PREFIX)/bin/jccs"
+	@echo "Done. Run \`$(PREFIX)/bin/jccs install' to finish setup."
+
+.PHONY: uninstall
+uninstall: ## Remove jccs from PREFIX
+	@rm -f "$(DESTDIR)$(PREFIX)/bin/jccs"
 
 ##@ Build
 
