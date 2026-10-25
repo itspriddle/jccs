@@ -1,5 +1,7 @@
 //! Values derived from the raw statusline input, ready for display.
 
+use std::path::Path;
+
 use crate::{
     config::{Config, ContextConfig},
     input::{self, StatusInput},
@@ -7,6 +9,8 @@ use crate::{
 
 const FIVE_HOURS_SECS: i64 = 5 * 60 * 60;
 const SEVEN_DAYS_SECS: i64 = 7 * 24 * 60 * 60;
+const ONE_MILLION_TOKENS: u64 = 1_000_000;
+const MODEL_FAMILIES: [&str; 4] = ["Opus", "Sonnet", "Haiku", "Fable"];
 
 /// Facts from outside the JSON payload, injected so derivation stays pure.
 #[derive(Debug, Default)]
@@ -20,9 +24,7 @@ pub struct Env {
 
 #[derive(Debug, Default)]
 pub struct Status {
-    pub model: Option<String>,
-    pub effort: Option<String>,
-    pub thinking: Option<bool>,
+    pub model: ModelStatus,
     pub cost_usd: Option<f64>,
     pub cost_today_usd: Option<f64>,
     pub lines_added: Option<u64>,
@@ -31,6 +33,17 @@ pub struct Status {
     pub seven_day: Option<RateWindow>,
     pub context: Option<ContextStatus>,
     pub git: GitStatus,
+    pub workspace: WorkspaceStatus,
+}
+
+#[derive(Debug, Default)]
+pub struct ModelStatus {
+    /// `"{family} {version}"`, with `" (1M)"` appended for a 1M context.
+    pub display_name: Option<String>,
+    pub family: Option<String>,
+    pub version: Option<String>,
+    pub effort: Option<String>,
+    pub thinking: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,6 +77,7 @@ pub struct RateWindow {
 #[derive(Debug, PartialEq)]
 pub struct ContextStatus {
     pub size: u64,
+    pub million_tokens: bool,
     pub reserved_tokens: u64,
     pub used_tokens: u64,
     /// Percentages relative to `size - reserved_tokens`.
@@ -84,17 +98,29 @@ pub struct GitStatus {
     pub pr_url: Option<String>,
 }
 
+#[derive(Debug, Default)]
+pub struct WorkspaceStatus {
+    pub project_dir: Option<String>,
+    /// Basename of `project_dir`.
+    pub project_name: Option<String>,
+}
+
 impl Status {
     pub fn from_input(input: &StatusInput, env: &Env, config: &Config) -> Self {
         let cost = input.cost.as_ref();
         let limits = input.rate_limits.as_ref();
-        let repo = input.workspace.as_ref().and_then(|w| w.repo.as_ref());
+        let workspace = input.workspace.as_ref();
+        let repo = workspace.and_then(|w| w.repo.as_ref());
         let pr = input.pr.as_ref();
+        let project_dir = workspace.and_then(|w| w.project_dir.clone());
+        let context = input
+            .context_window
+            .as_ref()
+            .and_then(|c| ContextStatus::new(c, &config.context));
+        let million_tokens = context.as_ref().is_some_and(|c| c.million_tokens);
 
         Self {
-            model: input.model.as_ref().and_then(|m| m.display_name.clone()),
-            effort: input.effort.as_ref().and_then(|e| e.level.clone()),
-            thinking: input.thinking.as_ref().and_then(|t| t.enabled),
+            model: ModelStatus::new(input, million_tokens),
             cost_usd: cost.and_then(|c| c.total_cost_usd),
             cost_today_usd: env.cost_today_usd,
             lines_added: cost.and_then(|c| c.total_lines_added),
@@ -105,10 +131,7 @@ impl Status {
             seven_day: limits
                 .and_then(|l| l.seven_day.as_ref())
                 .and_then(|r| RateWindow::new(r, SEVEN_DAYS_SECS, env.now)),
-            context: input
-                .context_window
-                .as_ref()
-                .and_then(|c| ContextStatus::new(c, &config.context)),
+            context,
             git: GitStatus {
                 branch: env
                     .git_branch
@@ -119,8 +142,78 @@ impl Status {
                 pr_number: pr.and_then(|p| p.number),
                 pr_url: pr.and_then(|p| p.url.clone()),
             },
+            workspace: WorkspaceStatus {
+                project_name: project_dir.as_deref().and_then(basename),
+                project_dir,
+            },
         }
     }
+}
+
+impl ModelStatus {
+    fn new(input: &StatusInput, million_tokens: bool) -> Self {
+        let model = input.model.as_ref();
+        let (family, version) = model
+            .and_then(|m| m.id.as_deref())
+            .map(parse_model_id)
+            .unwrap_or_default();
+
+        let display_name = match (&family, &version) {
+            (Some(f), Some(v)) => Some(format!("{f} {v}")),
+            _ => model.and_then(|m| m.display_name.clone()),
+        }
+        .map(|name| {
+            if million_tokens && !name.contains("1M") {
+                format!("{name} (1M)")
+            } else {
+                name
+            }
+        });
+
+        Self {
+            display_name,
+            family,
+            version,
+            effort: input.effort.as_ref().and_then(|e| e.level.clone()),
+            thinking: input.thinking.as_ref().and_then(|t| t.enabled),
+        }
+    }
+}
+
+/// Extracts the family and version from a model ID such as
+/// `claude-opus-5-5`, `claude-3-5-sonnet-20241022`, or
+/// `us.anthropic.claude-sonnet-4-5-20250929-v1:0`.
+fn parse_model_id(id: &str) -> (Option<String>, Option<String>) {
+    let Some((_, rest)) = id.split_once("claude-") else {
+        return (None, None);
+    };
+    // Drop variant suffixes like `[1m]`.
+    let rest = rest.split('[').next().unwrap_or_default();
+    let parts: Vec<&str> = rest.split('-').collect();
+
+    let family = parts.iter().find_map(|part| {
+        MODEL_FAMILIES
+            .iter()
+            .find(|f| f.eq_ignore_ascii_case(part))
+            .map(|&f| f.to_owned())
+    });
+
+    // Version numbers are short; longer digit runs are release dates.
+    let version: Vec<&str> = parts
+        .iter()
+        .copied()
+        .filter(|p| p.len() <= 2 && p.bytes().all(|b| b.is_ascii_digit()))
+        .take(2)
+        .collect();
+    let version = (!version.is_empty()).then(|| version.join("."));
+
+    (family, version)
+}
+
+fn basename(path: &str) -> Option<String> {
+    Path::new(path)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
 }
 
 impl RateWindow {
@@ -166,6 +259,7 @@ impl ContextStatus {
 
         Some(Self {
             size,
+            million_tokens: size >= ONE_MILLION_TOKENS,
             reserved_tokens: config.reserved_tokens,
             used_tokens,
             used_pct,
@@ -307,6 +401,81 @@ mod tests {
     #[test]
     fn context_requires_size() {
         assert!(ContextStatus::new(&ContextWindow::default(), &no_reserve()).is_none());
+    }
+
+    #[test]
+    fn parses_model_ids() {
+        let cases = [
+            ("claude-opus-5-5", Some("Opus"), Some("5.5")),
+            ("claude-fable-5-1", Some("Fable"), Some("5.1")),
+            ("claude-haiku-5-5[1m]", Some("Haiku"), Some("5.5")),
+            ("claude-opus-4-20250514", Some("Opus"), Some("4")),
+            ("claude-3-5-sonnet-20241022", Some("Sonnet"), Some("3.5")),
+            (
+                "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                Some("Sonnet"),
+                Some("4.5"),
+            ),
+            ("claude-mystery", None, None),
+            ("gpt-4", None, None),
+        ];
+        for (id, family, version) in cases {
+            let (f, v) = parse_model_id(id);
+            assert_eq!((f.as_deref(), v.as_deref()), (family, version), "{id}");
+        }
+    }
+
+    fn model_input(id: &str, display_name: &str, size: u64) -> StatusInput {
+        StatusInput {
+            model: Some(input::Model {
+                id: Some(id.into()),
+                display_name: Some(display_name.into()),
+            }),
+            context_window: Some(window(size, 0)),
+            ..StatusInput::default()
+        }
+    }
+
+    #[test]
+    fn model_display_name() {
+        let cases = [
+            ("claude-opus-5-5", "Opus", 200_000, "Opus 5.5"),
+            ("claude-opus-5-5[1m]", "Opus", 1_000_000, "Opus 5.5 (1M)"),
+            ("custom", "Custom", 200_000, "Custom"),
+            ("custom", "Custom", 1_000_000, "Custom (1M)"),
+            (
+                "custom",
+                "Custom (1M context)",
+                1_000_000,
+                "Custom (1M context)",
+            ),
+        ];
+        for (id, display_name, size, expected) in cases {
+            let input = model_input(id, display_name, size);
+            let status = Status::from_input(&input, &Env::default(), &Config::default());
+            assert_eq!(status.model.display_name.as_deref(), Some(expected), "{id}");
+        }
+    }
+
+    #[test]
+    fn context_flags_million_tokens() {
+        let ctx = |size| ContextStatus::new(&window(size, 0), &no_reserve());
+        assert_eq!(ctx(200_000).map(|c| c.million_tokens), Some(false));
+        assert_eq!(ctx(1_000_000).map(|c| c.million_tokens), Some(true));
+    }
+
+    #[test]
+    fn workspace_project_name_is_basename() {
+        let input = StatusInput {
+            workspace: Some(input::Workspace {
+                project_dir: Some("/src/jccs/".into()),
+                ..input::Workspace::default()
+            }),
+            ..StatusInput::default()
+        };
+        let status = Status::from_input(&input, &Env::default(), &Config::default());
+        assert_eq!(status.workspace.project_dir.as_deref(), Some("/src/jccs/"));
+        assert_eq!(status.workspace.project_name.as_deref(), Some("jccs"));
     }
 
     #[test]

@@ -44,7 +44,7 @@ impl Default for Config {
                     .map(|&s| SegmentSpec::Format(s.to_owned()))
                     .chain([SegmentSpec::When {
                         format: "[yellow]{icon.thinking}[/]".to_owned(),
-                        when: "thinking.enabled".to_owned(),
+                        when: "model.thinking.enabled".to_owned(),
                     }])
                     .collect(),
             ),
@@ -58,7 +58,7 @@ impl Default for Config {
 const DEFAULT_SEPARATOR: &str = " [dim]│[/] ";
 
 const DEFAULT_SEGMENTS: [&str; 5] = [
-    "[bold]{model.name}[/]",
+    "[bold]{model.display_name}[/]",
     "[cyan]{icon.branch} {git.branch}[/]",
     "[$context.level]{icon.context} {context.used_pct}[/]",
     "{icon.clock} {rate.five_hour.used_pct}",
@@ -350,8 +350,8 @@ mod tests {
     #[test]
     fn default_layout_compiles() -> Result<()> {
         let vars = vec![
-            ("model.name", Value::Text("Opus".into())),
-            ("thinking.enabled", Value::Bool(true)),
+            ("model.display_name", Value::Text("Opus".into())),
+            ("model.thinking.enabled", Value::Bool(true)),
         ];
         let line = parse("color_mode = \"none\"")?.compile()?.render(&vars);
         assert_eq!(line, "Opus │ ✻");
@@ -360,14 +360,15 @@ mod tests {
 
     #[test]
     fn parses_segment_forms() -> Result<()> {
-        let config = parse(r#"segments = ["a", { format = "b", when = "thinking.enabled" }]"#)?;
+        let config =
+            parse(r#"segments = ["a", { format = "b", when = "model.thinking.enabled" }]"#)?;
         assert_eq!(
             config.segments,
             Segments::Line(vec![
                 SegmentSpec::Format("a".into()),
                 SegmentSpec::When {
                     format: "b".into(),
-                    when: "thinking.enabled".into()
+                    when: "model.thinking.enabled".into()
                 },
             ])
         );
@@ -392,15 +393,15 @@ mod tests {
             color_mode = "none"
             separator = " | "
             segments = [
-                ["{model.name}", "a"],
-                ["{git.branch}", { format = "T", when = "thinking.enabled" }],
+                ["{model.display_name}", "a"],
+                ["{git.branch}", { format = "T", when = "model.thinking.enabled" }],
                 ["b"],
             ]
         "#;
-        let vars = vec![("model.name", Value::Text("Opus".into()))];
+        let vars = vec![("model.display_name", Value::Text("Opus".into()))];
         assert_eq!(render(toml, &vars)?, "Opus | a\nb");
 
-        let vars = vec![("thinking.enabled", Value::Bool(true))];
+        let vars = vec![("model.thinking.enabled", Value::Bool(true))];
         assert_eq!(render(toml, &vars)?, "a\nT\nb");
         Ok(())
     }
@@ -411,15 +412,15 @@ mod tests {
             color_mode = "none"
             separator = " | "
             segments = [
-                "{model.name}",
+                "{model.display_name}",
                 "{git.branch}",
-                { format = "T", when = "thinking.enabled" },
+                { format = "T", when = "model.thinking.enabled" },
                 "end",
             ]
         "#;
         let vars = vec![
-            ("model.name", Value::Text("Opus".into())),
-            ("thinking.enabled", Value::Bool(false)),
+            ("model.display_name", Value::Text("Opus".into())),
+            ("model.thinking.enabled", Value::Bool(false)),
         ];
         assert_eq!(render(toml, &vars)?, "Opus | end");
         Ok(())
@@ -455,7 +456,7 @@ mod tests {
             r#"segments = [{ format = "x", when = "nope" }]"#,
             r#"segments = ["a", ["b"]]"#,
             r#"segments = [["{nope}"]]"#,
-            r#"separator = "{model.name}""#,
+            r#"separator = "{model.display_name}""#,
             r#"colors.x = "blurple""#,
             r"colors.x = {}",
             r##"colors.x = { rgb = "#zzzzzz" }"##,
@@ -488,7 +489,7 @@ mod tests {
             .iter()
             .map(|&name| {
                 let value = match name {
-                    "thinking.enabled" => Value::Bool(true),
+                    "model.thinking.enabled" => Value::Bool(true),
                     "context.level" => Value::Level(Level::Caution),
                     "cost.total_usd" => Value::Usd(1.23),
                     "cost.today_usd" => Value::Usd(12.34),
@@ -508,7 +509,7 @@ mod tests {
             .iter()
             .filter(|(name, _)| !name.starts_with("git.") && !name.starts_with("cost."))
             .map(|(name, value)| match *name {
-                "thinking.enabled" => (*name, Value::Bool(false)),
+                "model.thinking.enabled" => (*name, Value::Bool(false)),
                 _ => (*name, value.clone()),
             })
             .collect();

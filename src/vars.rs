@@ -52,9 +52,11 @@ pub type Vars = Vec<(&'static str, Value)>;
 
 /// Every name [`Status::vars`] can produce, in output order.
 pub const NAMES: &[&str] = &[
-    "model.name",
-    "effort.level",
-    "thinking.enabled",
+    "model.display_name",
+    "model.family",
+    "model.version",
+    "model.effort.level",
+    "model.thinking.enabled",
     "cost.total_usd",
     "cost.today_usd",
     "lines.added",
@@ -70,6 +72,7 @@ pub const NAMES: &[&str] = &[
     RATE_SEVEN_DAY[3],
     RATE_SEVEN_DAY[4],
     "context.size",
+    "context.1m_tokens",
     "context.reserved_tokens",
     "context.used_tokens",
     "context.used_pct",
@@ -82,6 +85,8 @@ pub const NAMES: &[&str] = &[
     "git.repo",
     "git.pr.number",
     "git.pr.url",
+    "workspace.project_dir",
+    "workspace.project_name",
 ];
 
 pub fn lookup<'a>(vars: &'a Vars, name: &str) -> Option<&'a Value> {
@@ -97,9 +102,15 @@ impl Status {
             }
         };
 
-        push("model.name", self.model.clone().map(Value::Text));
-        push("effort.level", self.effort.clone().map(Value::Text));
-        push("thinking.enabled", self.thinking.map(Value::Bool));
+        let model = &self.model;
+        push(
+            "model.display_name",
+            model.display_name.clone().map(Value::Text),
+        );
+        push("model.family", model.family.clone().map(Value::Text));
+        push("model.version", model.version.clone().map(Value::Text));
+        push("model.effort.level", model.effort.clone().map(Value::Text));
+        push("model.thinking.enabled", model.thinking.map(Value::Bool));
 
         push("cost.total_usd", self.cost_usd.map(Value::Usd));
         push("cost.today_usd", self.cost_today_usd.map(Value::Usd));
@@ -115,6 +126,7 @@ impl Status {
 
         if let Some(c) = &self.context {
             push("context.size", Some(Value::Int(c.size)));
+            push("context.1m_tokens", Some(Value::Bool(c.million_tokens)));
             push(
                 "context.reserved_tokens",
                 Some(Value::Int(c.reserved_tokens)),
@@ -142,6 +154,16 @@ impl Status {
         push("git.repo", git.repo.clone().map(Value::Text));
         push("git.pr.number", git.pr_number.map(Value::Int));
         push("git.pr.url", git.pr_url.clone().map(Value::Text));
+
+        let workspace = &self.workspace;
+        push(
+            "workspace.project_dir",
+            workspace.project_dir.clone().map(Value::Text),
+        );
+        push(
+            "workspace.project_name",
+            workspace.project_name.clone().map(Value::Text),
+        );
 
         vars
     }
@@ -178,7 +200,7 @@ fn push_rate(push: &mut impl FnMut(&'static str, Option<Value>), names: RateName
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::status::{ContextStatus, GitStatus};
+    use crate::status::{ContextStatus, GitStatus, ModelStatus, WorkspaceStatus};
 
     #[test]
     fn formats_durations() {
@@ -206,9 +228,13 @@ mod tests {
             })
         };
         let status = Status {
-            model: Some("m".into()),
-            effort: Some("high".into()),
-            thinking: Some(true),
+            model: ModelStatus {
+                display_name: Some("Opus 5.5".into()),
+                family: Some("Opus".into()),
+                version: Some("5.5".into()),
+                effort: Some("high".into()),
+                thinking: Some(true),
+            },
             cost_usd: Some(1.0),
             cost_today_usd: Some(2.0),
             lines_added: Some(1),
@@ -217,6 +243,7 @@ mod tests {
             seven_day: window(),
             context: Some(ContextStatus {
                 size: 1,
+                million_tokens: false,
                 reserved_tokens: 0,
                 used_tokens: 1,
                 used_pct: 1.0,
@@ -231,6 +258,10 @@ mod tests {
                 repo: Some("r".into()),
                 pr_number: Some(1),
                 pr_url: Some("u".into()),
+            },
+            workspace: WorkspaceStatus {
+                project_dir: Some("/p".into()),
+                project_name: Some("p".into()),
             },
         };
         let names: Vec<_> = status.vars().into_iter().map(|(n, _)| n).collect();

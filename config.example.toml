@@ -11,7 +11,7 @@
 #
 #   jccs vars                        # list every value and its current output
 #   jccs --config ./test.toml        # render with another config file
-#   jccs --format '[bold]{model.name}[/]'  # render one ad-hoc template
+#   jccs --format '{model.family}'   # render one ad-hoc template
 #   jccs --color-mode none           # disable colors for this run
 #
 # Pipe a statusline payload in to see real values, e.g.
@@ -23,7 +23,7 @@
 #
 # `separator` and each entry in `segments` is a template:
 #
-#   {model.name}         insert a value (see "Values" below). If the value is
+#   {git.branch}         insert a value (see "Values" below). If the value is
 #                        missing, the whole segment is dropped.
 #   {icon.branch}        insert an entry from [icons]
 #   [bold red]...[/]     apply a style until the matching [/]; styles nest
@@ -46,9 +46,11 @@
 # Values
 # ---------------------------------------------------------------------------
 #
-#   model.name                       text        Opus
-#   effort.level                     text        high
-#   thinking.enabled                 bool        true
+#   model.display_name               text        Opus 5.5 (1M)   ("(1M)" only with a 1M context)
+#   model.family                     text        Opus, Sonnet, Haiku, or Fable
+#   model.version                    text        5.5
+#   model.effort.level               text        high
+#   model.thinking.enabled           bool        true
 #   cost.total_usd                   dollars     $1.23   (this session)
 #   cost.today_usd                   dollars     $12.34  (all sessions today)
 #   lines.added                      integer     156
@@ -66,6 +68,7 @@
 #   rate.seven_day.resets_in         duration    3d 4h
 #
 #   context.size                     integer     200000
+#   context.1m_tokens                bool        false   (size is 1M tokens)
 #   context.reserved_tokens          integer     20000
 #   context.used_tokens              integer     90000
 #   context.used_pct                 percent     50.0%   (of size - reserved)
@@ -79,6 +82,9 @@
 #   git.repo                         text        jccs
 #   git.pr.number                    integer     3
 #   git.pr.url                       text        https://github.com/...
+#
+#   workspace.project_dir            text        /Users/me/src/jccs
+#   workspace.project_name           text        jccs
 
 # How colors are written:
 #
@@ -100,16 +106,16 @@ separator = " [dim]│[/] "
 # where every segment is skipped are dropped:
 #
 #   segments = [
-#     ["[bold]{model.name}[/]", "[cyan]{icon.branch} {git.branch}[/]"],
+#     ["[bold]{model.display_name}[/]", "[cyan]{icon.branch} {git.branch}[/]"],
 #     ["{icon.clock} {rate.five_hour.used_pct}", "{cost.total_usd}"],
 #   ]
 segments = [
-  "[bold]{model.name}[/]",
+  "[bold]{model.display_name}[/]",
   "[cyan]{icon.branch} {git.branch}[/]",
   "[$context.level]{icon.context} {context.used_pct}[/]",
   "{icon.clock} {rate.five_hour.used_pct}",
   "{cost.total_usd}",
-  { format = "[yellow]{icon.thinking}[/]", when = "thinking.enabled" },
+  { format = "[yellow]{icon.thinking}[/]", when = "model.thinking.enabled" },
 ]
 
 # Referenced as {icon.<name>}. Add your own (Nerd Font glyphs work too); set
