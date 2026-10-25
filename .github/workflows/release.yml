@@ -91,3 +91,21 @@ jobs:
             --title "$TAG" \
             --generate-notes \
             --verify-tag
+
+  bump-formula:
+    name: Bump Homebrew formula
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: homebrew
+    permissions: {}
+    steps:
+      - name: Dispatch tap workflow
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh workflow run bump-formula.yml \
+            --repo itspriddle/homebrew-brews \
+            -f formula=jccs \
+            -f "version=$TAG"
