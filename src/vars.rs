@@ -157,6 +157,6 @@ mod tests {
     #[test]
     fn omits_missing_values() {
         let vars = Status::default().vars();
-        assert!(vars.is_empty());
+        assert_eq!(vars, Vars::new());
     }
 }
