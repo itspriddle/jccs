@@ -7,17 +7,19 @@ Claude Code statuslines are a dime a dozen. This one is mine. Use it or don't.
 ## Install
 
 ```sh
-cargo build ...
-cp jccs ~/.claude/
-~/.claude/jccs install
+git clone https://github.com/itspriddle/jccs
+cd jccs
+make build
+sudo make install
+jccs install
 $EDITOR ~/.config/jccs/config.toml
 ```
 
 ## Uninstall
 
 ```sh
-~/.claude/jccs uninstall
-rm ~/.claude/jccs
+jccs uninstall
+sudo rm /usr/local/bin/jccs
 ```
 
 ## License
