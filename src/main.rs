@@ -1,6 +1,7 @@
 mod config;
 mod git;
 mod input;
+mod install;
 mod status;
 mod style;
 mod template;
@@ -52,6 +53,23 @@ enum Command {
         #[arg(short, long)]
         force: bool,
     },
+    /// Set jccs as the statusline in Claude Code's settings.json and create
+    /// the config file if it is missing.
+    Install {
+        /// Replace an existing statusLine and config file.
+        #[arg(short, long)]
+        overwrite: bool,
+        /// Don't ask for confirmation.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Remove the jccs statusLine from Claude Code's settings.json and delete
+    /// the config directory.
+    Uninstall {
+        /// Don't ask for confirmation.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Args)]
@@ -74,6 +92,8 @@ fn main() -> ExitCode {
         Some(Command::Render(args)) => render(args),
         Some(Command::Vars { config }) => print_vars(config.as_deref()),
         Some(Command::Configure { force }) => configure(force),
+        Some(Command::Install { overwrite, yes }) => install::install(overwrite, yes),
+        Some(Command::Uninstall { yes }) => install::uninstall(yes),
     };
 
     match result {
