@@ -6,7 +6,7 @@ CARGO := cargo
 
 ##@ Quality
 
-.PHONY: all
+.PHONY: check
 check: lint test ## Run all linters and unit tests
 
 .PHONY: lint
