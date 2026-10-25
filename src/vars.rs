@@ -50,6 +50,43 @@ fn write_duration(f: &mut fmt::Formatter<'_>, secs: i64) -> fmt::Result {
 /// Ordered `(name, value)` pairs; absent values are omitted.
 pub type Vars = Vec<(&'static str, Value)>;
 
+/// Every name [`Status::vars`] can produce, in output order.
+pub const NAMES: &[&str] = &[
+    "model.name",
+    "effort.level",
+    "thinking.enabled",
+    "cost.total_usd",
+    "lines.added",
+    "lines.removed",
+    RATE_FIVE_HOUR[0],
+    RATE_FIVE_HOUR[1],
+    RATE_FIVE_HOUR[2],
+    RATE_FIVE_HOUR[3],
+    RATE_FIVE_HOUR[4],
+    RATE_SEVEN_DAY[0],
+    RATE_SEVEN_DAY[1],
+    RATE_SEVEN_DAY[2],
+    RATE_SEVEN_DAY[3],
+    RATE_SEVEN_DAY[4],
+    "context.size",
+    "context.reserved_tokens",
+    "context.used_tokens",
+    "context.used_pct",
+    "context.remaining_pct",
+    "context.level",
+    "context.reported_used_pct",
+    "context.reported_remaining_pct",
+    "git.branch",
+    "git.owner",
+    "git.repo",
+    "git.pr.number",
+    "git.pr.url",
+];
+
+pub fn lookup<'a>(vars: &'a Vars, name: &str) -> Option<&'a Value> {
+    vars.iter().find(|(n, _)| *n == name).map(|(_, v)| v)
+}
+
 impl Status {
     pub fn vars(&self) -> Vars {
         let mut vars = Vars::new();
@@ -139,6 +176,7 @@ fn push_rate(push: &mut impl FnMut(&'static str, Option<Value>), names: RateName
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::status::{ContextStatus, GitStatus};
 
     #[test]
     fn formats_durations() {
@@ -152,6 +190,48 @@ mod tests {
         for (secs, expected) in cases {
             assert_eq!(Value::Duration(secs).to_string(), expected);
         }
+    }
+
+    #[test]
+    fn names_match_fully_populated_status() {
+        let window = || {
+            Some(RateWindow {
+                used_pct: 1.0,
+                remaining_pct: 99.0,
+                starts_at: Some(1),
+                resets_at: Some(2),
+                resets_in: Some(1),
+            })
+        };
+        let status = Status {
+            model: Some("m".into()),
+            effort: Some("high".into()),
+            thinking: Some(true),
+            cost_usd: Some(1.0),
+            lines_added: Some(1),
+            lines_removed: Some(1),
+            five_hour: window(),
+            seven_day: window(),
+            context: Some(ContextStatus {
+                size: 1,
+                reserved_tokens: 0,
+                used_tokens: 1,
+                used_pct: 1.0,
+                remaining_pct: 99.0,
+                level: Level::Good,
+                reported_used_pct: Some(1.0),
+                reported_remaining_pct: Some(99.0),
+            }),
+            git: GitStatus {
+                branch: Some("main".into()),
+                owner: Some("o".into()),
+                repo: Some("r".into()),
+                pr_number: Some(1),
+                pr_url: Some("u".into()),
+            },
+        };
+        let names: Vec<_> = status.vars().into_iter().map(|(n, _)| n).collect();
+        assert_eq!(names, NAMES);
     }
 
     #[test]

@@ -150,7 +150,11 @@ impl ContextStatus {
                     + usage.cache_creation_input_tokens.unwrap_or(0)
                     + usage.cache_read_input_tokens.unwrap_or(0)
             }
-            None => (window.used_percentage? / 100.0 * size as f64).round() as u64,
+            // `current_usage` is null before the first API call of a session;
+            // fall back to the reported percentage, then to nothing used.
+            None => window
+                .used_percentage
+                .map_or(0, |pct| (pct / 100.0 * size as f64).round() as u64),
         };
 
         let effective = size.saturating_sub(config.reserved_tokens).max(1);
@@ -282,6 +286,18 @@ mod tests {
         };
         let ctx = ContextStatus::new(&w, &ContextConfig::default());
         assert_eq!(ctx.map(|c| c.used_tokens), Some(20_000));
+    }
+
+    #[test]
+    fn context_without_usage_counts_as_empty() {
+        let w = ContextWindow {
+            context_window_size: Some(200_000),
+            ..ContextWindow::default()
+        };
+        let ctx = ContextStatus::new(&w, &ContextConfig::default());
+        assert_eq!(ctx.as_ref().map(|c| c.size), Some(200_000));
+        assert_eq!(ctx.as_ref().map(|c| c.used_tokens), Some(0));
+        assert_eq!(ctx.map(|c| c.level), Some(Level::Good));
     }
 
     #[test]
