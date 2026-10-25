@@ -10,7 +10,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value, json};
 
-use crate::config;
+use crate::{config, ledger};
 
 const STATUS_LINE: &str = "statusLine";
 
@@ -18,6 +18,8 @@ const STATUS_LINE: &str = "statusLine";
 struct Paths {
     settings: PathBuf,
     config: PathBuf,
+    /// Ledger state; `None` when `HOME` and `XDG_STATE_HOME` are unset.
+    state: Option<PathBuf>,
     exe: PathBuf,
 }
 
@@ -28,6 +30,7 @@ impl Paths {
                 .context("cannot find Claude settings; set HOME or CLAUDE_CONFIG_DIR")?,
             config: config::config_path()
                 .context("cannot determine config directory; set HOME or XDG_CONFIG_HOME")?,
+            state: ledger::state_dir(),
             // Not canonicalized, so a symlink (e.g. from a package manager)
             // keeps working after the binary it points to is upgraded.
             exe: env::current_exe().context("locating the jccs binary")?,
@@ -65,6 +68,7 @@ enum Action {
         overwrite: bool,
     },
     RemoveConfigDir(PathBuf),
+    RemoveStateDir(PathBuf),
 }
 
 impl fmt::Display for Action {
@@ -99,7 +103,9 @@ impl fmt::Display for Action {
                 path,
                 overwrite: true,
             } => write!(f, "overwrite {}", path.display()),
-            Self::RemoveConfigDir(dir) => write!(f, "remove {}", dir.display()),
+            Self::RemoveConfigDir(dir) | Self::RemoveStateDir(dir) => {
+                write!(f, "remove {}", dir.display())
+            }
         }
     }
 }
@@ -126,8 +132,11 @@ pub fn install(overwrite: bool, yes: bool) -> Result<()> {
 pub fn uninstall(yes: bool) -> Result<()> {
     let paths = Paths::discover()?;
     let settings = read_settings(&paths.settings)?;
-    let config_dir_exists = paths.config_dir().is_some_and(Path::exists);
-    let (actions, warning) = plan_uninstall(settings.as_ref(), &paths, config_dir_exists);
+    let existing = Existing {
+        config_dir: paths.config_dir().is_some_and(Path::exists),
+        state_dir: paths.state.as_deref().is_some_and(Path::exists),
+    };
+    let (actions, warning) = plan_uninstall(settings.as_ref(), &paths, existing);
 
     if let Some(warning) = warning {
         println!("warning: {warning}");
@@ -194,10 +203,17 @@ fn plan_install(
 
 /// Returns the actions plus a warning when the statusLine belongs to
 /// something other than jccs and is left alone.
+/// Which jccs directories are present on disk.
+#[derive(Debug, Default, Clone, Copy)]
+struct Existing {
+    config_dir: bool,
+    state_dir: bool,
+}
+
 fn plan_uninstall(
     settings: Option<&Value>,
     paths: &Paths,
-    config_dir_exists: bool,
+    existing: Existing,
 ) -> (Vec<Action>, Option<String>) {
     let mut actions = Vec::new();
     let mut warning = None;
@@ -216,8 +232,11 @@ fn plan_uninstall(
         }
     }
 
-    if let Some(dir) = paths.config_dir().filter(|_| config_dir_exists) {
+    if let Some(dir) = paths.config_dir().filter(|_| existing.config_dir) {
         actions.push(Action::RemoveConfigDir(dir.to_owned()));
+    }
+    if let Some(dir) = paths.state.as_ref().filter(|_| existing.state_dir) {
+        actions.push(Action::RemoveStateDir(dir.clone()));
     }
 
     (actions, warning)
@@ -310,7 +329,7 @@ fn apply(settings: Option<Value>, actions: &[Action]) -> Result<()> {
                 write_settings(path, &settings)?;
             }
             Action::WriteConfig { path, overwrite } => config::write_template(path, *overwrite)?,
-            Action::RemoveConfigDir(dir) => {
+            Action::RemoveConfigDir(dir) | Action::RemoveStateDir(dir) => {
                 fs::remove_dir_all(dir).with_context(|| format!("removing {}", dir.display()))?;
             }
         }
@@ -381,6 +400,7 @@ mod tests {
         Paths {
             settings: PathBuf::from("/home/me/.claude/settings.json"),
             config: PathBuf::from("/home/me/.config/jccs/config.toml"),
+            state: Some(PathBuf::from("/home/me/.local/state/jccs")),
             exe: PathBuf::from("/usr/local/bin/jccs"),
         }
     }
@@ -471,9 +491,13 @@ mod tests {
     }
 
     #[test]
-    fn uninstall_removes_jccs_statusline_and_config_dir() {
+    fn uninstall_removes_jccs_statusline_and_dirs() {
         let settings = with_command("/opt/homebrew/bin/jccs");
-        let (actions, warning) = plan_uninstall(Some(&settings), &paths(), true);
+        let existing = Existing {
+            config_dir: true,
+            state_dir: true,
+        };
+        let (actions, warning) = plan_uninstall(Some(&settings), &paths(), existing);
         assert_eq!(
             actions,
             [
@@ -481,6 +505,7 @@ mod tests {
                     settings: paths().settings
                 },
                 Action::RemoveConfigDir(PathBuf::from("/home/me/.config/jccs")),
+                Action::RemoveStateDir(PathBuf::from("/home/me/.local/state/jccs")),
             ]
         );
         assert_eq!(warning, None);
@@ -489,14 +514,14 @@ mod tests {
     #[test]
     fn uninstall_leaves_other_statuslines() {
         let settings = with_command("ccstatusline");
-        let (actions, warning) = plan_uninstall(Some(&settings), &paths(), false);
+        let (actions, warning) = plan_uninstall(Some(&settings), &paths(), Existing::default());
         assert_eq!(actions, []);
         assert!(warning.is_some_and(|w| w.contains("ccstatusline")));
     }
 
     #[test]
     fn uninstall_with_nothing_installed() {
-        let (actions, warning) = plan_uninstall(Some(&json!({})), &paths(), false);
+        let (actions, warning) = plan_uninstall(Some(&json!({})), &paths(), Existing::default());
         assert_eq!(actions, []);
         assert_eq!(warning, None);
     }

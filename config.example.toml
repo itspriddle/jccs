@@ -49,7 +49,8 @@
 #   model.name                       text        Opus
 #   effort.level                     text        high
 #   thinking.enabled                 bool        true
-#   cost.total_usd                   dollars     $1.23
+#   cost.total_usd                   dollars     $1.23   (this session)
+#   cost.today_usd                   dollars     $12.34  (all sessions today)
 #   lines.added                      integer     156
 #   lines.removed                    integer     23
 #

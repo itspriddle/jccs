@@ -14,6 +14,8 @@ pub struct Env {
     /// Current Unix timestamp (seconds).
     pub now: i64,
     pub git_branch: Option<String>,
+    /// Spend across every session today, from the ledger.
+    pub cost_today_usd: Option<f64>,
 }
 
 #[derive(Debug, Default)]
@@ -22,6 +24,7 @@ pub struct Status {
     pub effort: Option<String>,
     pub thinking: Option<bool>,
     pub cost_usd: Option<f64>,
+    pub cost_today_usd: Option<f64>,
     pub lines_added: Option<u64>,
     pub lines_removed: Option<u64>,
     pub five_hour: Option<RateWindow>,
@@ -93,6 +96,7 @@ impl Status {
             effort: input.effort.as_ref().and_then(|e| e.level.clone()),
             thinking: input.thinking.as_ref().and_then(|t| t.enabled),
             cost_usd: cost.and_then(|c| c.total_cost_usd),
+            cost_today_usd: env.cost_today_usd,
             lines_added: cost.and_then(|c| c.total_lines_added),
             lines_removed: cost.and_then(|c| c.total_lines_removed),
             five_hour: limits
