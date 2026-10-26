@@ -76,9 +76,11 @@
 #   rate.seven_day.resets_in         duration    3d 4h
 #
 #   context.size                     integer     200000
+#   context.size_short               tokens      200K    (1K, 1.3M)
 #   context.1m_tokens                bool        false   (size is 1M tokens)
 #   context.reserved_tokens          integer     20000
 #   context.used_tokens              integer     90000
+#   context.used_tokens_short        tokens      90K
 #   context.used_pct                 percent     50%     (of size - reserved)
 #   context.remaining_pct            percent     50%
 #   context.level                    level       good, caution, or danger

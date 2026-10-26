@@ -16,6 +16,8 @@ pub enum Value {
     Timestamp(i64),
     /// Seconds.
     Duration(i64),
+    /// Token count, shown abbreviated.
+    Tokens(u64),
     Level(Level),
 }
 
@@ -29,6 +31,7 @@ impl fmt::Display for Value {
             Self::Bool(b) => write!(f, "{b}"),
             Self::Timestamp(t) => write!(f, "{t}"),
             Self::Duration(secs) => write_duration(f, *secs),
+            Self::Tokens(n) => write_tokens(f, *n),
             Self::Level(level) => f.write_str(level.as_str()),
         }
     }
@@ -44,6 +47,20 @@ fn write_duration(f: &mut fmt::Formatter<'_>, secs: i64) -> fmt::Result {
         (0, 0, _) => write!(f, "{mins}m"),
         (0, _, _) => write!(f, "{hours}h {mins}m"),
         _ => write!(f, "{days}d {hours}h"),
+    }
+}
+
+fn write_tokens(f: &mut fmt::Formatter<'_>, n: u64) -> fmt::Result {
+    match n {
+        0..1_000 => write!(f, "{n}"),
+        1_000..1_000_000 => write!(f, "{}K", n / 1_000),
+        _ => {
+            let tenths = n / 100_000;
+            match tenths % 10 {
+                0 => write!(f, "{}M", tenths / 10),
+                d => write!(f, "{}.{d}M", tenths / 10),
+            }
+        }
     }
 }
 
@@ -77,9 +94,11 @@ pub const NAMES: &[&str] = &[
     RATE_SEVEN_DAY[5],
     RATE_SEVEN_DAY[6],
     "context.size",
+    "context.size_short",
     "context.1m_tokens",
     "context.reserved_tokens",
     "context.used_tokens",
+    "context.used_tokens_short",
     "context.used_pct",
     "context.remaining_pct",
     "context.level",
@@ -138,12 +157,17 @@ impl Status {
 
         if let Some(c) = &self.context {
             push("context.size", Some(Value::Int(c.size)));
+            push("context.size_short", Some(Value::Tokens(c.size)));
             push("context.1m_tokens", Some(Value::Bool(c.million_tokens)));
             push(
                 "context.reserved_tokens",
                 Some(Value::Int(c.reserved_tokens)),
             );
             push("context.used_tokens", Some(Value::Int(c.used_tokens)));
+            push(
+                "context.used_tokens_short",
+                Some(Value::Tokens(c.used_tokens)),
+            );
             push("context.used_pct", Some(Value::Percent(c.used_pct)));
             push(
                 "context.remaining_pct",
@@ -239,6 +263,25 @@ mod tests {
         ];
         for (secs, expected) in cases {
             assert_eq!(Value::Duration(secs).to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn formats_tokens() {
+        let cases = [
+            (0, "0"),
+            (999, "999"),
+            (1_000, "1K"),
+            (1_500, "1K"),
+            (90_000, "90K"),
+            (999_999, "999K"),
+            (1_000_000, "1M"),
+            (1_250_000, "1.2M"),
+            (1_300_000, "1.3M"),
+            (12_000_000, "12M"),
+        ];
+        for (n, expected) in cases {
+            assert_eq!(Value::Tokens(n).to_string(), expected);
         }
     }
 
