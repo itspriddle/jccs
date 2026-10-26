@@ -2,7 +2,7 @@
 
 Claude Code statuslines are a dime a dozen. This one is mine. Use it or don't.
 
-![](docs/assets/screenshot-v0.1.0.png)
+![](docs/assets/screenshot-v0.4.0.png)
 
 ## Install
 
