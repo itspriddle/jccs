@@ -234,7 +234,9 @@ pub fn var_name(name: &str) -> Result<&'static str> {
 /// zero, and not empty.
 pub fn truthy(vars: &Vars, name: &str) -> bool {
     match vars::lookup(vars, name) {
-        None | Some(Value::Bool(false) | Value::Int(0) | Value::Duration(0)) => false,
+        None | Some(Value::Bool(false) | Value::Int(0) | Value::Tokens(0) | Value::Duration(0)) => {
+            false
+        }
         Some(Value::Usd(n) | Value::Percent(n)) => *n != 0.0,
         Some(Value::Text(s)) => !s.is_empty(),
         Some(_) => true,
