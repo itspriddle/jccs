@@ -2,6 +2,8 @@
 
 use std::path::Path;
 
+use jiff::{Timestamp, civil::Date, tz::TimeZone};
+
 use crate::{
     config::{Config, ContextConfig},
     input::{self, StatusInput},
@@ -13,13 +15,26 @@ const ONE_MILLION_TOKENS: u64 = 1_000_000;
 const MODEL_FAMILIES: [&str; 4] = ["Opus", "Sonnet", "Haiku", "Fable"];
 
 /// Facts from outside the JSON payload, injected so derivation stays pure.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Env {
     /// Current Unix timestamp (seconds).
     pub now: i64,
+    /// Zone used to show clock times.
+    pub tz: TimeZone,
     pub git_branch: Option<String>,
     /// Spend across every session today, from the ledger.
     pub cost_today_usd: Option<f64>,
+}
+
+impl Default for Env {
+    fn default() -> Self {
+        Self {
+            now: 0,
+            tz: TimeZone::UTC,
+            git_branch: None,
+            cost_today_usd: None,
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -67,9 +82,12 @@ impl Level {
 pub struct RateWindow {
     pub used_pct: f64,
     pub remaining_pct: f64,
+    /// Clock times in [`Env::tz`], e.g. `5:00pm`.
+    pub started_at: Option<String>,
+    pub resets_at: Option<String>,
     /// Unix timestamps (seconds).
-    pub starts_at: Option<i64>,
-    pub resets_at: Option<i64>,
+    pub started_at_unix: Option<i64>,
+    pub resets_at_unix: Option<i64>,
     /// Seconds until reset, never negative.
     pub resets_in: Option<i64>,
 }
@@ -127,10 +145,10 @@ impl Status {
             lines_removed: cost.and_then(|c| c.total_lines_removed),
             five_hour: limits
                 .and_then(|l| l.five_hour.as_ref())
-                .and_then(|r| RateWindow::new(r, FIVE_HOURS_SECS, env.now)),
+                .and_then(|r| RateWindow::new(r, FIVE_HOURS_SECS, env.now, &env.tz)),
             seven_day: limits
                 .and_then(|l| l.seven_day.as_ref())
-                .and_then(|r| RateWindow::new(r, SEVEN_DAYS_SECS, env.now)),
+                .and_then(|r| RateWindow::new(r, SEVEN_DAYS_SECS, env.now, &env.tz)),
             context,
             git: GitStatus {
                 branch: env
@@ -217,18 +235,43 @@ fn basename(path: &str) -> Option<String> {
 }
 
 impl RateWindow {
-    fn new(limit: &input::RateLimit, window_secs: i64, now: i64) -> Option<Self> {
+    fn new(limit: &input::RateLimit, window_secs: i64, now: i64, tz: &TimeZone) -> Option<Self> {
         let used_pct = limit.used_percentage?;
         let resets_at = limit.resets_at;
+        let started_at = resets_at.map(|r| r - window_secs);
+        let today = local_date(now, tz);
 
         Some(Self {
             used_pct,
             remaining_pct: (100.0 - used_pct).max(0.0),
-            starts_at: resets_at.map(|r| r - window_secs),
-            resets_at,
+            started_at: started_at.and_then(|t| clock_time(t, tz, today)),
+            resets_at: resets_at.and_then(|t| clock_time(t, tz, today)),
+            started_at_unix: started_at,
+            resets_at_unix: resets_at,
             resets_in: resets_at.map(|r| (r - now).max(0)),
         })
     }
+}
+
+/// Formats a Unix timestamp as a 12-hour clock time, e.g. `5:00pm`, with the
+/// weekday prepended (`Tue 5:00pm`) when it falls on a date other than `today`.
+fn clock_time(secs: i64, tz: &TimeZone, today: Option<Date>) -> Option<String> {
+    let zoned = Timestamp::from_second(secs).ok()?.to_zoned(tz.clone());
+    let format = if today.is_some_and(|d| d != zoned.date()) {
+        "%a %-I:%M%P"
+    } else {
+        "%-I:%M%P"
+    };
+    Some(zoned.strftime(format).to_string())
+}
+
+fn local_date(secs: i64, tz: &TimeZone) -> Option<Date> {
+    Some(
+        Timestamp::from_second(secs)
+            .ok()?
+            .to_zoned(tz.clone())
+            .date(),
+    )
 }
 
 impl ContextStatus {
@@ -313,22 +356,64 @@ mod tests {
 
     #[test]
     fn rate_window_derives_start_and_countdown() {
-        let w = RateWindow::new(&rate(23.5, 20_000), FIVE_HOURS_SECS, 15_000);
+        let w = RateWindow::new(&rate(23.5, 20_000), FIVE_HOURS_SECS, 15_000, &TimeZone::UTC);
         assert_eq!(
             w,
             Some(RateWindow {
                 used_pct: 23.5,
                 remaining_pct: 76.5,
-                starts_at: Some(2_000),
-                resets_at: Some(20_000),
+                started_at: Some("12:33am".into()),
+                resets_at: Some("5:33am".into()),
+                started_at_unix: Some(2_000),
+                resets_at_unix: Some(20_000),
                 resets_in: Some(5_000),
             })
         );
     }
 
     #[test]
+    fn clock_time_is_12_hour_in_zone() -> Result<(), jiff::Error> {
+        let cases = [
+            (0, "12:00am"),
+            (9 * 3_600 + 5 * 60, "9:05am"),
+            (12 * 3_600, "12:00pm"),
+            (17 * 3_600, "5:00pm"),
+        ];
+        for (secs, expected) in cases {
+            assert_eq!(
+                clock_time(secs, &TimeZone::UTC, None).as_deref(),
+                Some(expected)
+            );
+        }
+
+        let tz = TimeZone::get("America/New_York")?;
+        assert_eq!(clock_time(0, &tz, None).as_deref(), Some("7:00pm"));
+        assert_eq!(clock_time(i64::MAX, &TimeZone::UTC, None), None);
+        Ok(())
+    }
+
+    #[test]
+    fn clock_time_shows_weekday_off_today() {
+        // 1970-01-01 was a Thursday.
+        let today = local_date(0, &TimeZone::UTC);
+        let at = |secs| clock_time(secs, &TimeZone::UTC, today);
+        assert_eq!(at(17 * 3_600).as_deref(), Some("5:00pm"));
+        assert_eq!(at(86_400 + 17 * 3_600).as_deref(), Some("Fri 5:00pm"));
+        assert_eq!(at(-3_600).as_deref(), Some("Wed 11:00pm"));
+    }
+
+    #[test]
+    fn rate_window_shows_weekdays_off_today() {
+        let now = 17 * 3_600;
+        let w = RateWindow::new(&rate(1.0, now), SEVEN_DAYS_SECS, now, &TimeZone::UTC);
+        let w = w.as_ref();
+        assert_eq!(w.and_then(|w| w.resets_at.as_deref()), Some("5:00pm"));
+        assert_eq!(w.and_then(|w| w.started_at.as_deref()), Some("Thu 5:00pm"));
+    }
+
+    #[test]
     fn rate_window_countdown_saturates_at_zero() {
-        let w = RateWindow::new(&rate(10.0, 100), SEVEN_DAYS_SECS, 500);
+        let w = RateWindow::new(&rate(10.0, 100), SEVEN_DAYS_SECS, 500, &TimeZone::UTC);
         assert_eq!(w.and_then(|w| w.resets_in), Some(0));
     }
 
@@ -338,7 +423,7 @@ mod tests {
             used_percentage: None,
             resets_at: Some(1),
         };
-        assert!(RateWindow::new(&limit, FIVE_HOURS_SECS, 0).is_none());
+        assert!(RateWindow::new(&limit, FIVE_HOURS_SECS, 0, &TimeZone::UTC).is_none());
     }
 
     #[test]

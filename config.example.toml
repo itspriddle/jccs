@@ -62,13 +62,17 @@
 #
 #   rate.five_hour.used_pct          percent     42.0%
 #   rate.five_hour.remaining_pct     percent     58.0%
-#   rate.five_hour.starts_at         unix time   1767225600
-#   rate.five_hour.resets_at         unix time   1767243600
+#   rate.five_hour.started_at        text        12:00am  (local; weekday unless today)
+#   rate.five_hour.started_at_unix   unix time   1767225600
+#   rate.five_hour.resets_at         text        5:00am
+#   rate.five_hour.resets_at_unix    unix time   1767243600
 #   rate.five_hour.resets_in         duration    2h 15m
 #   rate.seven_day.used_pct          percent     12.5%
 #   rate.seven_day.remaining_pct     percent     87.5%
-#   rate.seven_day.starts_at         unix time   1766880000
-#   rate.seven_day.resets_at         unix time   1767484800
+#   rate.seven_day.started_at        text        Sun 12:00am
+#   rate.seven_day.started_at_unix   unix time   1766880000
+#   rate.seven_day.resets_at         text        Sun 12:00am
+#   rate.seven_day.resets_at_unix    unix time   1767484800
 #   rate.seven_day.resets_in         duration    3d 4h
 #
 #   context.size                     integer     200000
