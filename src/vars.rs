@@ -25,7 +25,7 @@ impl fmt::Display for Value {
             Self::Text(s) => f.write_str(s),
             Self::Int(n) => write!(f, "{n}"),
             Self::Usd(n) => write!(f, "${n:.2}"),
-            Self::Percent(n) => write!(f, "{n:.1}%"),
+            Self::Percent(n) => write!(f, "{n:.0}%"),
             Self::Bool(b) => write!(f, "{b}"),
             Self::Timestamp(t) => write!(f, "{t}"),
             Self::Duration(secs) => write_duration(f, *secs),
@@ -239,6 +239,14 @@ mod tests {
         ];
         for (secs, expected) in cases {
             assert_eq!(Value::Duration(secs).to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn formats_percents_as_whole_numbers() {
+        let cases = [(42.0, "42%"), (12.5, "12%"), (99.6, "100%"), (0.4, "0%")];
+        for (n, expected) in cases {
+            assert_eq!(Value::Percent(n).to_string(), expected);
         }
     }
 
