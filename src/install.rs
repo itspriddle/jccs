@@ -350,7 +350,7 @@ fn set_status_line(settings: &mut Value, command: &str) {
     if let Some(map) = settings.as_object_mut() {
         map.insert(
             STATUS_LINE.to_owned(),
-            json!({ "type": "command", "command": command, "padding": 0 }),
+            json!({ "type": "command", "command": command, "padding": 0, "refreshInterval": 60 }),
         );
     }
 }
@@ -455,7 +455,7 @@ mod tests {
         assert_eq!(keys, ["zeta", "alpha", STATUS_LINE]);
         assert_eq!(
             settings[STATUS_LINE],
-            json!({ "type": "command", "command": "/usr/local/bin/jccs", "padding": 0 })
+            json!({ "type": "command", "command": "/usr/local/bin/jccs", "padding": 0, "refreshInterval": 60 })
         );
     }
 
