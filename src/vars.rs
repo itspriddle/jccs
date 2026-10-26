@@ -67,11 +67,15 @@ pub const NAMES: &[&str] = &[
     RATE_FIVE_HOUR[2],
     RATE_FIVE_HOUR[3],
     RATE_FIVE_HOUR[4],
+    RATE_FIVE_HOUR[5],
+    RATE_FIVE_HOUR[6],
     RATE_SEVEN_DAY[0],
     RATE_SEVEN_DAY[1],
     RATE_SEVEN_DAY[2],
     RATE_SEVEN_DAY[3],
     RATE_SEVEN_DAY[4],
+    RATE_SEVEN_DAY[5],
+    RATE_SEVEN_DAY[6],
     "context.size",
     "context.1m_tokens",
     "context.reserved_tokens",
@@ -178,30 +182,44 @@ impl Status {
 }
 
 /// Variable names for one rate-limit window, in output order.
-type RateNames = [&'static str; 5];
+type RateNames = [&'static str; 7];
 
 const RATE_FIVE_HOUR: RateNames = [
     "rate.five_hour.used_pct",
     "rate.five_hour.remaining_pct",
-    "rate.five_hour.starts_at",
+    "rate.five_hour.started_at",
+    "rate.five_hour.started_at_unix",
     "rate.five_hour.resets_at",
+    "rate.five_hour.resets_at_unix",
     "rate.five_hour.resets_in",
 ];
 
 const RATE_SEVEN_DAY: RateNames = [
     "rate.seven_day.used_pct",
     "rate.seven_day.remaining_pct",
-    "rate.seven_day.starts_at",
+    "rate.seven_day.started_at",
+    "rate.seven_day.started_at_unix",
     "rate.seven_day.resets_at",
+    "rate.seven_day.resets_at_unix",
     "rate.seven_day.resets_in",
 ];
 
 fn push_rate(push: &mut impl FnMut(&'static str, Option<Value>), names: RateNames, w: &RateWindow) {
-    let [used, remaining, starts_at, resets_at, resets_in] = names;
+    let [
+        used,
+        remaining,
+        started_at,
+        started_at_unix,
+        resets_at,
+        resets_at_unix,
+        resets_in,
+    ] = names;
     push(used, Some(Value::Percent(w.used_pct)));
     push(remaining, Some(Value::Percent(w.remaining_pct)));
-    push(starts_at, w.starts_at.map(Value::Timestamp));
-    push(resets_at, w.resets_at.map(Value::Timestamp));
+    push(started_at, w.started_at.clone().map(Value::Text));
+    push(started_at_unix, w.started_at_unix.map(Value::Timestamp));
+    push(resets_at, w.resets_at.clone().map(Value::Text));
+    push(resets_at_unix, w.resets_at_unix.map(Value::Timestamp));
     push(resets_in, w.resets_in.map(Value::Duration));
 }
 
@@ -246,8 +264,10 @@ mod tests {
             Some(RateWindow {
                 used_pct: 1.0,
                 remaining_pct: 99.0,
-                starts_at: Some(1),
-                resets_at: Some(2),
+                started_at: Some("12:00am".into()),
+                resets_at: Some("12:00am".into()),
+                started_at_unix: Some(1),
+                resets_at_unix: Some(2),
                 resets_in: Some(1),
             })
         };

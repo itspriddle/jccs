@@ -168,6 +168,7 @@ fn read_status(config: &Config) -> Result<Status> {
 
     let env = Env {
         now: unix_now()?,
+        tz: jiff::tz::TimeZone::system(),
         git_branch: git::branch(dir),
         cost_today_usd: ledger::state_dir()
             .and_then(|state| ledger::today_usd(&state, &ledger::today(), session)),
