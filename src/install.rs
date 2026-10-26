@@ -102,7 +102,11 @@ impl fmt::Display for Action {
             Self::WriteConfig {
                 path,
                 overwrite: true,
-            } => write!(f, "overwrite {}", path.display()),
+            } => write!(
+                f,
+                "overwrite {} (existing file is backed up)",
+                path.display()
+            ),
             Self::RemoveConfigDir(dir) | Self::RemoveStateDir(dir) => {
                 write!(f, "remove {}", dir.display())
             }
@@ -328,7 +332,11 @@ fn apply(settings: Option<Value>, actions: &[Action]) -> Result<()> {
                 }
                 write_settings(path, &settings)?;
             }
-            Action::WriteConfig { path, overwrite } => config::write_template(path, *overwrite)?,
+            Action::WriteConfig { path, overwrite } => {
+                if let Some(backup) = config::write_template(path, *overwrite)? {
+                    println!("backed up {} to {}", path.display(), backup.display());
+                }
+            }
             Action::RemoveConfigDir(dir) | Action::RemoveStateDir(dir) => {
                 fs::remove_dir_all(dir).with_context(|| format!("removing {}", dir.display()))?;
             }

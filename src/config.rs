@@ -292,14 +292,18 @@ fn parse(contents: &str) -> Result<Config> {
 }
 
 /// Writes [`TEMPLATE`] to `path`, creating parent directories. Refuses to
-/// replace an existing file unless `force` is set.
-pub fn write_template(path: &Path, force: bool) -> Result<()> {
+/// replace an existing file unless `force` is set, in which case the existing
+/// file is first copied to a timestamped backup. Returns the backup's path if
+/// one was made.
+pub fn write_template(path: &Path, force: bool) -> Result<Option<PathBuf>> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     }
 
     if force {
-        return fs::write(path, TEMPLATE).with_context(|| format!("writing {}", path.display()));
+        let backup = backup_existing(path, &jiff::Zoned::now())?;
+        fs::write(path, TEMPLATE).with_context(|| format!("writing {}", path.display()))?;
+        return Ok(backup);
     }
 
     // `create_new` fails atomically if the file exists, so there's no window
@@ -315,7 +319,44 @@ pub fn write_template(path: &Path, force: bool) -> Result<()> {
         Err(err) => return Err(err).with_context(|| format!("creating {}", path.display())),
     };
     file.write_all(TEMPLATE.as_bytes())
-        .with_context(|| format!("writing {}", path.display()))
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(None)
+}
+
+/// Copies `path` to [`backup_path`], keeping its permissions. Skips the
+/// backup if `path` is missing or already matches [`TEMPLATE`].
+fn backup_existing(path: &Path, now: &jiff::Zoned) -> Result<Option<PathBuf>> {
+    let contents = match fs::read(path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err).with_context(|| format!("reading {}", path.display())),
+    };
+    if contents == TEMPLATE.as_bytes() {
+        return Ok(None);
+    }
+
+    let backup = backup_path(path, now);
+    // `create_new` so a backup made in the same second is never replaced.
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&backup)
+        .with_context(|| format!("creating {}", backup.display()))?;
+    file.write_all(&contents)
+        .with_context(|| format!("writing {}", backup.display()))?;
+    let permissions = fs::metadata(path)
+        .with_context(|| format!("reading {}", path.display()))?
+        .permissions();
+    fs::set_permissions(&backup, permissions)
+        .with_context(|| format!("setting permissions on {}", backup.display()))?;
+    Ok(Some(backup))
+}
+
+/// Returns `path` with `.bak.<timestamp>` appended to its file name.
+fn backup_path(path: &Path, now: &jiff::Zoned) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_owned();
+    name.push(format!(".bak.{}", now.strftime("%Y%m%dT%H%M%S")));
+    path.with_file_name(name)
 }
 
 #[cfg(test)]
@@ -550,8 +591,43 @@ mod tests {
             assert!(format!("{err:#}").contains("--force"));
             assert_eq!(fs::read_to_string(&path)?, "edited");
 
-            write_template(&path, true)?;
+            let Some(backup) = write_template(&path, true)? else {
+                bail!("expected a backup");
+            };
+            assert_eq!(fs::read_to_string(&backup)?, "edited");
             assert_eq!(fs::read_to_string(&path)?, TEMPLATE);
+
+            // Nothing to lose, so no second backup.
+            assert_eq!(write_template(&path, true)?, None);
+            Ok(())
+        })();
+
+        fs::remove_dir_all(&dir)?;
+        result
+    }
+
+    #[test]
+    fn backup_path_appends_timestamp() -> Result<()> {
+        let now: jiff::Zoned = "2026-10-25T14:30:12[UTC]".parse()?;
+        assert_eq!(
+            backup_path(Path::new("/home/me/.config/jccs/config.toml"), &now),
+            PathBuf::from("/home/me/.config/jccs/config.toml.bak.20261025T143012")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn backup_refuses_to_replace_existing_backup() -> Result<()> {
+        let dir = env::temp_dir().join(format!("jccs-backup-test-{}", std::process::id()));
+        let path = dir.join("config.toml");
+        let now: jiff::Zoned = "2026-10-25T14:30:12[UTC]".parse()?;
+
+        let result = (|| -> Result<()> {
+            fs::create_dir_all(&dir)?;
+            fs::write(&path, "edited")?;
+            fs::write(backup_path(&path, &now), "earlier")?;
+            assert!(backup_existing(&path, &now).is_err());
+            assert_eq!(fs::read_to_string(backup_path(&path, &now))?, "earlier");
             Ok(())
         })();
 

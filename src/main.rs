@@ -137,7 +137,9 @@ fn print_vars(config_path: Option<&Path>) -> Result<()> {
 fn configure(force: bool) -> Result<()> {
     let path = config::config_path()
         .context("cannot determine config directory; set HOME or XDG_CONFIG_HOME")?;
-    config::write_template(&path, force)?;
+    if let Some(backup) = config::write_template(&path, force)? {
+        println!("backed up existing config to {}", backup.display());
+    }
     println!("wrote {}", path.display());
     Ok(())
 }
