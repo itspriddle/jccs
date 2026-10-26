@@ -4,11 +4,13 @@
 //! - `{icon.branch}` inserts an `[icons]` entry.
 //! - `[bold red on #222222]` pushes a style, `[/]` pops it.
 //! - `[$context.level]` colors with the palette entry named by a value.
+//! - `{?lines.added}…{/}` renders its contents only when the value is
+//!   truthy; a missing value inside drops just the group.
 //! - `{{`, `}}`, `[[`, `]]` are literal braces and brackets.
 
 use std::{collections::BTreeMap, fmt::Write as _};
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 
 use crate::{
     style::{ColorMode, Palette, RESET, Style},
@@ -23,6 +25,17 @@ enum Node {
     /// Foreground color from the palette entry named by a value.
     PushVar(&'static str),
     Pop,
+    /// Contents shown only when the named value is truthy.
+    Group {
+        when: &'static str,
+        nodes: Vec<Node>,
+    },
+}
+
+/// A construct opened while parsing and awaiting its closing tag.
+enum Open {
+    Style,
+    Group(&'static str),
 }
 
 /// Everything a template may reference, fixed at config load.
@@ -38,9 +51,10 @@ pub struct Template {
 
 impl Template {
     pub fn parse(source: &str, scope: &Scope<'_>) -> Result<Self> {
-        let mut nodes = Vec::new();
+        // `levels[0]` is the top level; each open group adds one.
+        let mut levels: Vec<Vec<Node>> = vec![Vec::new()];
+        let mut open: Vec<Open> = Vec::new();
         let mut text = String::new();
-        let mut depth = 0usize;
         let mut chars = source.chars().peekable();
 
         while let Some(c) = chars.next() {
@@ -62,20 +76,38 @@ impl Template {
                     }
                     let inner = inner.trim();
 
+                    let nodes = levels
+                        .last_mut()
+                        .ok_or_else(|| anyhow!("unbalanced group"))?;
                     if !text.is_empty() {
                         nodes.push(Node::Text(std::mem::take(&mut text)));
                     }
 
                     if c == '{' {
-                        nodes.push(parse_value(inner, scope)?);
+                        if inner == "/" {
+                            let Some(Open::Group(when)) = open.pop() else {
+                                bail!(
+                                    "`{{/}}` without a matching `{{?…}}`, or a style left open inside it"
+                                );
+                            };
+                            let nodes = levels.pop().ok_or_else(|| anyhow!("unbalanced group"))?;
+                            levels
+                                .last_mut()
+                                .ok_or_else(|| anyhow!("unbalanced group"))?
+                                .push(Node::Group { when, nodes });
+                        } else if let Some(name) = inner.strip_prefix('?') {
+                            open.push(Open::Group(var_name(name.trim())?));
+                            levels.push(Vec::new());
+                        } else {
+                            nodes.push(parse_value(inner, scope)?);
+                        }
                     } else if inner == "/" {
-                        if depth == 0 {
+                        if !matches!(open.pop(), Some(Open::Style)) {
                             bail!("`[/]` without a matching style");
                         }
-                        depth -= 1;
                         nodes.push(Node::Pop);
                     } else {
-                        depth += 1;
+                        open.push(Open::Style);
                         nodes.push(match inner.strip_prefix('$') {
                             Some(name) => Node::PushVar(var_name(name)?),
                             None => Node::Push(Style::parse(inner, scope.palette)?),
@@ -86,6 +118,11 @@ impl Template {
             }
         }
 
+        if open.iter().any(|o| matches!(o, Open::Group(_))) {
+            bail!("unterminated `{{?…}}`; close it with `{{/}}`");
+        }
+
+        let mut nodes = levels.pop().ok_or_else(|| anyhow!("unbalanced group"))?;
         if !text.is_empty() {
             nodes.push(Node::Text(text));
         }
@@ -95,9 +132,7 @@ impl Template {
 
     /// True when rendering depends on statusline values.
     pub fn uses_vars(&self) -> bool {
-        self.nodes
-            .iter()
-            .any(|n| matches!(n, Node::Var(_) | Node::PushVar(_)))
+        uses_vars(&self.nodes)
     }
 
     /// Renders the template, or `None` when a referenced value is missing.
@@ -105,37 +140,7 @@ impl Template {
         let mut out = String::new();
         let mut stack: Vec<Style> = Vec::new();
 
-        for node in &self.nodes {
-            match node {
-                Node::Text(text) => out.push_str(text),
-                Node::Var(name) => {
-                    let _ = write!(out, "{}", vars::lookup(vars, name)?);
-                }
-                Node::Push(style) => {
-                    style.write_sgr(&mut out, mode);
-                    stack.push(style.clone());
-                }
-                Node::PushVar(name) => {
-                    let value = vars::lookup(vars, name)?.to_string();
-                    let style = palette
-                        .get(&value)
-                        .copied()
-                        .map(Style::fg)
-                        .unwrap_or_default();
-                    style.write_sgr(&mut out, mode);
-                    stack.push(style);
-                }
-                Node::Pop => {
-                    stack.pop();
-                    if mode != ColorMode::None {
-                        out.push_str(RESET);
-                        for style in &stack {
-                            style.write_sgr(&mut out, mode);
-                        }
-                    }
-                }
-            }
-        }
+        render_nodes(&self.nodes, vars, palette, mode, &mut out, &mut stack)?;
 
         if !stack.is_empty() && mode != ColorMode::None {
             out.push_str(RESET);
@@ -143,6 +148,68 @@ impl Template {
 
         Some(out)
     }
+}
+
+fn uses_vars(nodes: &[Node]) -> bool {
+    nodes
+        .iter()
+        .any(|n| matches!(n, Node::Var(_) | Node::PushVar(_) | Node::Group { .. }))
+}
+
+/// Appends `nodes` to `out`, or returns `None` when a value is missing.
+/// On `None`, `out` and `stack` may hold partial output.
+fn render_nodes(
+    nodes: &[Node],
+    vars: &Vars,
+    palette: &Palette,
+    mode: ColorMode,
+    out: &mut String,
+    stack: &mut Vec<Style>,
+) -> Option<()> {
+    for node in nodes {
+        match node {
+            Node::Text(text) => out.push_str(text),
+            Node::Var(name) => {
+                let _ = write!(out, "{}", vars::lookup(vars, name)?);
+            }
+            Node::Push(style) => {
+                style.write_sgr(out, mode);
+                stack.push(style.clone());
+            }
+            Node::PushVar(name) => {
+                let value = vars::lookup(vars, name)?.to_string();
+                let style = palette
+                    .get(&value)
+                    .copied()
+                    .map(Style::fg)
+                    .unwrap_or_default();
+                style.write_sgr(out, mode);
+                stack.push(style);
+            }
+            Node::Pop => {
+                stack.pop();
+                if mode != ColorMode::None {
+                    out.push_str(RESET);
+                    for style in stack.iter() {
+                        style.write_sgr(out, mode);
+                    }
+                }
+            }
+            Node::Group { when, nodes } => {
+                if !truthy(vars, when) {
+                    continue;
+                }
+                // Styles are balanced inside a group, so on success `stack`
+                // is unchanged; on failure, roll back to before the group.
+                let (len, depth) = (out.len(), stack.len());
+                if render_nodes(nodes, vars, palette, mode, out, stack).is_none() {
+                    out.truncate(len);
+                    stack.truncate(depth);
+                }
+            }
+        }
+    }
+    Some(())
 }
 
 fn parse_value(inner: &str, scope: &Scope<'_>) -> Result<Node> {
@@ -163,9 +230,15 @@ pub fn var_name(name: &str) -> Result<&'static str> {
     }
 }
 
-/// Whether a `when` condition holds: present and not `false`.
+/// Whether a `when` or `{?…}` condition holds: present, not `false`, not
+/// zero, and not empty.
 pub fn truthy(vars: &Vars, name: &str) -> bool {
-    !matches!(vars::lookup(vars, name), None | Some(Value::Bool(false)))
+    match vars::lookup(vars, name) {
+        None | Some(Value::Bool(false) | Value::Int(0) | Value::Duration(0)) => false,
+        Some(Value::Usd(n) | Value::Percent(n)) => *n != 0.0,
+        Some(Value::Text(s)) => !s.is_empty(),
+        Some(_) => true,
+    }
 }
 
 #[cfg(test)]
@@ -289,6 +362,11 @@ mod tests {
             "a}",
             "a]",
             "[$nope]",
+            "{?nope}x{/}",
+            "{?git.branch}x",
+            "{/}",
+            "{?git.branch}[red]x{/}",
+            "[red]{?git.branch}x[/]{/}",
         ] {
             assert!(parse(source).is_err(), "{source:?} should fail");
         }
@@ -299,14 +377,78 @@ mod tests {
         assert!(!parse("[dim]|[/] {icon.branch}")?.uses_vars());
         assert!(parse("{git.branch}")?.uses_vars());
         assert!(parse("[$context.level]")?.uses_vars());
+        assert!(parse("{?git.branch}x{/}")?.uses_vars());
         Ok(())
     }
 
     #[test]
-    fn when_is_truthy_unless_missing_or_false() {
-        let vars = sample();
+    fn when_is_truthy_unless_missing_false_zero_or_empty() {
+        let vars = vec![
+            ("git.branch", Value::Text("main".into())),
+            ("git.repo", Value::Text(String::new())),
+            ("model.thinking.enabled", Value::Bool(false)),
+            ("lines.added", Value::Int(3)),
+            ("lines.removed", Value::Int(0)),
+            ("cost.total_usd", Value::Usd(0.0)),
+            ("context.used_pct", Value::Percent(0.5)),
+        ];
         assert!(truthy(&vars, "git.branch"));
+        assert!(truthy(&vars, "lines.added"));
+        assert!(truthy(&vars, "context.used_pct"));
+        assert!(!truthy(&vars, "git.repo"));
         assert!(!truthy(&vars, "model.thinking.enabled"));
+        assert!(!truthy(&vars, "lines.removed"));
+        assert!(!truthy(&vars, "cost.total_usd"));
         assert!(!truthy(&vars, "model.display_name"));
+    }
+
+    #[test]
+    fn group_renders_only_when_truthy() -> Result<()> {
+        let source = "d{?lines.added} +{lines.added}{/}{?lines.removed} -{lines.removed}{/}";
+        let lines = |added, removed| {
+            vec![
+                ("lines.added", Value::Int(added)),
+                ("lines.removed", Value::Int(removed)),
+            ]
+        };
+        assert_eq!(
+            render(source, &lines(3, 1), ColorMode::None)?,
+            Some("d +3 -1".into())
+        );
+        assert_eq!(
+            render(source, &lines(3, 0), ColorMode::None)?,
+            Some("d +3".into())
+        );
+        assert_eq!(
+            render(source, &lines(0, 0), ColorMode::None)?,
+            Some("d".into())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn missing_value_in_group_drops_only_the_group() -> Result<()> {
+        assert_eq!(
+            render(
+                "{git.branch}{?git.branch}[red] {model.display_name}[/]{/}!",
+                &sample(),
+                ColorMode::TrueColor
+            )?,
+            Some("main!".into())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn groups_nest_with_styles() -> Result<()> {
+        assert_eq!(
+            render(
+                "[bold]{?git.branch}[red]{git.branch}[/]{/}x[/]",
+                &sample(),
+                ColorMode::TrueColor
+            )?,
+            Some("\x1b[1m\x1b[31mmain\x1b[0m\x1b[1mx\x1b[0m".into())
+        );
+        Ok(())
     }
 }

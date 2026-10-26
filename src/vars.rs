@@ -61,6 +61,7 @@ pub const NAMES: &[&str] = &[
     "cost.today_usd",
     "lines.added",
     "lines.removed",
+    "lines.changed",
     RATE_FIVE_HOUR[0],
     RATE_FIVE_HOUR[1],
     RATE_FIVE_HOUR[2],
@@ -116,6 +117,13 @@ impl Status {
         push("cost.today_usd", self.cost_today_usd.map(Value::Usd));
         push("lines.added", self.lines_added.map(Value::Int));
         push("lines.removed", self.lines_removed.map(Value::Int));
+        push(
+            "lines.changed",
+            match (self.lines_added, self.lines_removed) {
+                (None, None) => None,
+                (a, r) => Some(Value::Int(a.unwrap_or(0) + r.unwrap_or(0))),
+            },
+        );
 
         if let Some(w) = &self.five_hour {
             push_rate(&mut push, RATE_FIVE_HOUR, w);
@@ -214,6 +222,22 @@ mod tests {
         for (secs, expected) in cases {
             assert_eq!(Value::Duration(secs).to_string(), expected);
         }
+    }
+
+    #[test]
+    fn lines_changed_sums_added_and_removed() {
+        let changed = |added, removed| {
+            let status = Status {
+                lines_added: added,
+                lines_removed: removed,
+                ..Status::default()
+            };
+            lookup(&status.vars(), "lines.changed").cloned()
+        };
+        assert_eq!(changed(Some(3), Some(2)), Some(Value::Int(5)));
+        assert_eq!(changed(Some(3), None), Some(Value::Int(3)));
+        assert_eq!(changed(Some(0), Some(0)), Some(Value::Int(0)));
+        assert_eq!(changed(None, None), None);
     }
 
     #[test]

@@ -26,6 +26,9 @@
 #   {git.branch}         insert a value (see "Values" below). If the value is
 #                        missing, the whole segment is dropped.
 #   {icon.branch}        insert an entry from [icons]
+#   {?lines.added}...{/} show the contents only when the value is truthy
+#                        (present, not false, not zero, not empty). A missing
+#                        value inside drops just the group, not the segment.
 #   [bold red]...[/]     apply a style until the matching [/]; styles nest
 #   [on #073642]...[/]   set a background color
 #   [$context.level]     color with the [colors] entry named by a value,
@@ -55,6 +58,7 @@
 #   cost.today_usd                   dollars     $12.34  (all sessions today)
 #   lines.added                      integer     156
 #   lines.removed                    integer     23
+#   lines.changed                    integer     179     (added + removed)
 #
 #   rate.five_hour.used_pct          percent     42.0%
 #   rate.five_hour.remaining_pct     percent     58.0%
@@ -100,7 +104,11 @@ separator = " [dim]│[/] "
 
 # Rendered left to right; segments with missing values are skipped. A segment
 # is either a template string or `{ format = "...", when = "<value>" }`, which
-# is shown only when that value is present and not false.
+# is shown only when that value is truthy: present, not false, not zero, and
+# not empty. For example, line changes that hide each zero count and the
+# whole segment before any edits:
+#
+#   { format = "{?lines.added}[green]+{lines.added}[/]{?lines.removed} {/}{/}{?lines.removed}[red]-{lines.removed}[/]{/}", when = "lines.changed" }
 #
 # For a multi-line statusline, use one array of segments per line. Lines
 # where every segment is skipped are dropped:
