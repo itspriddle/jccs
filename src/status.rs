@@ -6,7 +6,7 @@ use jiff::{Timestamp, civil::Date, tz::TimeZone};
 
 use crate::{
     config::{Config, ContextConfig},
-    input::{self, StatusInput},
+    input::{self, StatusInput, Task},
 };
 
 const FIVE_HOURS_SECS: i64 = 5 * 60 * 60;
@@ -49,6 +49,20 @@ pub struct Status {
     pub context: Option<ContextStatus>,
     pub git: GitStatus,
     pub workspace: WorkspaceStatus,
+}
+
+/// One subagent row, derived from a task in the subagent payload.
+#[derive(Debug, Default)]
+pub struct SubagentStatus {
+    /// The task's name, falling back to its agent type.
+    pub name: Option<String>,
+    pub agent_type: Option<String>,
+    pub description: Option<String>,
+    pub status: Option<String>,
+    /// Seconds since the task started, never negative.
+    pub elapsed: Option<i64>,
+    pub model: ModelStatus,
+    pub context: Option<ContextStatus>,
 }
 
 #[derive(Debug, Default)]
@@ -168,17 +182,50 @@ impl Status {
     }
 }
 
+impl SubagentStatus {
+    /// `now` is the current Unix timestamp in seconds.
+    pub fn from_task(task: &Task, now: i64, config: &ContextConfig) -> Self {
+        let context = task
+            .context_window_size
+            .filter(|&s| s > 0)
+            .map(|size| ContextStatus::from_tokens(size, task.token_count.unwrap_or(0), config));
+        let million_tokens = context.as_ref().is_some_and(|c| c.million_tokens);
+
+        Self {
+            name: task.name.clone().or_else(|| task.agent_type.clone()),
+            agent_type: task.agent_type.clone(),
+            description: task.description.clone(),
+            status: task.status.clone(),
+            elapsed: task.start_time.map(|ms| (now - ms / 1_000).max(0)),
+            // Unrecognized IDs and aliases like `sonnet` show as given.
+            model: ModelStatus::from_id(task.model.as_deref(), task.model.clone(), million_tokens),
+            context,
+        }
+    }
+}
+
 impl ModelStatus {
     fn new(input: &StatusInput, million_tokens: bool) -> Self {
         let model = input.model.as_ref();
-        let (family, version) = model
-            .and_then(|m| m.id.as_deref())
-            .map(parse_model_id)
-            .unwrap_or_default();
+        Self {
+            effort: input.effort.as_ref().and_then(|e| e.level.clone()),
+            thinking: input.thinking.as_ref().and_then(|t| t.enabled),
+            ..Self::from_id(
+                model.and_then(|m| m.id.as_deref()),
+                model.and_then(|m| m.display_name.clone()),
+                million_tokens,
+            )
+        }
+    }
+
+    /// Derives the family, version, and display name from a model ID,
+    /// falling back to `display_name` when the ID isn't recognized.
+    fn from_id(id: Option<&str>, display_name: Option<String>, million_tokens: bool) -> Self {
+        let (family, version) = id.map(parse_model_id).unwrap_or_default();
 
         let display_name = match (&family, &version) {
             (Some(f), Some(v)) => Some(format!("{f} {v}")),
-            _ => model.and_then(|m| m.display_name.clone()),
+            _ => display_name,
         }
         .map(|name| {
             if million_tokens && !name.contains("1M") {
@@ -192,8 +239,8 @@ impl ModelStatus {
             display_name,
             family,
             version,
-            effort: input.effort.as_ref().and_then(|e| e.level.clone()),
-            thinking: input.thinking.as_ref().and_then(|t| t.enabled),
+            effort: None,
+            thinking: None,
         }
     }
 }
@@ -297,10 +344,24 @@ impl ContextStatus {
                 .map_or(0, |pct| (pct / 100.0 * size as f64).round() as u64),
         };
 
+        Some(Self {
+            reported_used_pct: window.used_percentage,
+            reported_remaining_pct: window.remaining_percentage,
+            ..Self::from_tokens(size, used_tokens, config)
+        })
+    }
+
+    /// Context usage measured against `size - reserved_tokens`, with no
+    /// reported percentages.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "token counts are far below f64's exact integer range"
+    )]
+    fn from_tokens(size: u64, used_tokens: u64, config: &ContextConfig) -> Self {
         let effective = size.saturating_sub(config.reserved_tokens).max(1);
         let used_pct = (used_tokens as f64 / effective as f64 * 100.0).clamp(0.0, 100.0);
 
-        Some(Self {
+        Self {
             size,
             million_tokens: size >= ONE_MILLION_TOKENS,
             reserved_tokens: config.reserved_tokens,
@@ -308,9 +369,9 @@ impl ContextStatus {
             used_pct,
             remaining_pct: 100.0 - used_pct,
             level: level_for(used_pct, config),
-            reported_used_pct: window.used_percentage,
-            reported_remaining_pct: window.remaining_percentage,
-        })
+            reported_used_pct: None,
+            reported_remaining_pct: None,
+        }
     }
 }
 
@@ -561,6 +622,68 @@ mod tests {
         let status = Status::from_input(&input, &Env::default(), &Config::default());
         assert_eq!(status.workspace.project_dir.as_deref(), Some("/src/jccs/"));
         assert_eq!(status.workspace.project_name.as_deref(), Some("jccs"));
+    }
+
+    fn task() -> Task {
+        Task {
+            id: Some("t1".into()),
+            agent_type: Some("Explore".into()),
+            model: Some("claude-opus-5".into()),
+            token_count: Some(90_000),
+            context_window_size: Some(200_000),
+            start_time: Some(1_000_500),
+            ..Task::default()
+        }
+    }
+
+    #[test]
+    fn subagent_derives_row_values() {
+        let status = SubagentStatus::from_task(&task(), 1_090, &ContextConfig::default());
+        assert_eq!(status.name.as_deref(), Some("Explore"));
+        assert_eq!(status.elapsed, Some(90));
+        assert_eq!(status.model.display_name.as_deref(), Some("Opus 5"));
+        let ctx = status.context;
+        assert_eq!(ctx.as_ref().map(|c| c.used_tokens), Some(90_000));
+        assert!(ctx.is_some_and(|c| (c.used_pct - 50.0).abs() < f64::EPSILON));
+    }
+
+    #[test]
+    fn subagent_shows_unrecognized_models_as_given() {
+        let task = Task {
+            model: Some("sonnet".into()),
+            ..task()
+        };
+        let status = SubagentStatus::from_task(&task, 0, &ContextConfig::default());
+        assert_eq!(status.model.display_name.as_deref(), Some("sonnet"));
+        assert_eq!(status.model.family, None);
+    }
+
+    #[test]
+    fn subagent_prefers_name_over_agent_type() {
+        let task = Task {
+            name: Some("auth-mapper".into()),
+            ..task()
+        };
+        let status = SubagentStatus::from_task(&task, 0, &ContextConfig::default());
+        assert_eq!(status.name.as_deref(), Some("auth-mapper"));
+        assert_eq!(status.agent_type.as_deref(), Some("Explore"));
+    }
+
+    #[test]
+    fn subagent_missing_values() {
+        let status = SubagentStatus::from_task(&Task::default(), 0, &ContextConfig::default());
+        assert_eq!(status.name, None);
+        assert_eq!(status.elapsed, None);
+        assert!(status.context.is_none());
+
+        let task = Task {
+            context_window_size: Some(0),
+            start_time: Some(5_000),
+            ..Task::default()
+        };
+        let status = SubagentStatus::from_task(&task, 1, &ContextConfig::default());
+        assert!(status.context.is_none());
+        assert_eq!(status.elapsed, Some(0));
     }
 
     #[test]

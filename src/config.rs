@@ -12,7 +12,7 @@ use serde::Deserialize;
 use crate::{
     style::{self, Color, ColorMode, Palette},
     template::{self, Scope, Template},
-    vars::Vars,
+    vars::{self, Vars},
 };
 
 /// A fully documented config that renders the same line as the defaults.
@@ -31,6 +31,7 @@ pub struct Config {
     /// Merged over the built-in color names and [`DEFAULT_COLORS`].
     pub colors: BTreeMap<String, ColorSpec>,
     pub context: ContextConfig,
+    pub subagent: SubagentConfig,
 }
 
 impl Default for Config {
@@ -51,6 +52,32 @@ impl Default for Config {
             icons: BTreeMap::new(),
             colors: BTreeMap::new(),
             context: ContextConfig::default(),
+            subagent: SubagentConfig::default(),
+        }
+    }
+}
+
+/// The subagent statusline: one row per running subagent. Icons, colors, and
+/// `color_mode` are shared with the main statusline.
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SubagentConfig {
+    /// Template placed between rendered segments; may not use values.
+    pub separator: String,
+    /// A single row; each subagent gets one.
+    pub segments: Vec<SegmentSpec>,
+    pub context: ContextConfig,
+}
+
+impl Default for SubagentConfig {
+    fn default() -> Self {
+        Self {
+            separator: DEFAULT_SEPARATOR.to_owned(),
+            segments: DEFAULT_SUBAGENT_SEGMENTS
+                .iter()
+                .map(|&s| SegmentSpec::Format(s.to_owned()))
+                .collect(),
+            context: ContextConfig::default(),
         }
     }
 }
@@ -63,6 +90,13 @@ const DEFAULT_SEGMENTS: [&str; 5] = [
     "[$context.level]{icon.context} {context.used_pct}[/]",
     "{icon.clock} {rate.five_hour.used_pct}",
     "{cost.total_usd}",
+];
+
+const DEFAULT_SUBAGENT_SEGMENTS: [&str; 4] = [
+    "[bold]{agent.name}[/]",
+    "{model.display_name}",
+    "[$context.level]{icon.context} {context.used_pct}[/]",
+    "{agent.elapsed}",
 ];
 
 /// Plain Unicode so the default line works without a Nerd Font.
@@ -160,63 +194,26 @@ impl Layout {
 }
 
 impl Config {
-    /// Validates templates, icons, and colors into a [`Layout`].
+    /// Validates the main statusline's templates, icons, and colors into a
+    /// [`Layout`].
     pub fn compile(&self) -> Result<Layout> {
-        let builtins = style::builtin_palette();
-        let mut palette = builtins.clone();
-        palette.extend(DEFAULT_COLORS.map(|(name, color)| (name.to_owned(), color)));
-        for (name, spec) in &self.colors {
-            let color = spec
-                .resolve(&builtins)
-                .with_context(|| format!("invalid color for `colors.{name}`"))?;
-            palette.insert(name.clone(), color);
-        }
-
-        let mut icons: BTreeMap<String, String> = DEFAULT_ICONS
-            .iter()
-            .map(|&(name, icon)| (name.to_owned(), icon.to_owned()))
-            .collect();
-        icons.extend(self.icons.clone());
-
+        let palette = self.palette()?;
+        let icons = self.icons();
         let scope = Scope {
             icons: &icons,
             palette: &palette,
+            names: vars::NAMES,
         };
 
-        let separator = Template::parse(&self.separator, &scope).context("in `separator`")?;
-        if separator.uses_vars() {
-            bail!("`separator` cannot reference values");
-        }
-        let separator = separator
-            .render(&Vars::new(), &palette, self.color_mode)
-            .unwrap_or_default();
-
-        let compile_line = |specs: &[SegmentSpec], path: &dyn Fn(usize) -> String| {
-            specs
-                .iter()
-                .enumerate()
-                .map(|(i, spec)| {
-                    let (format, when) = match spec {
-                        SegmentSpec::Format(format) => (format, None),
-                        SegmentSpec::When { format, when } => (format, Some(when)),
-                    };
-                    let segment = || -> Result<Segment> {
-                        Ok(Segment {
-                            template: Template::parse(format, &scope)?,
-                            when: when.map(|w| template::var_name(w)).transpose()?,
-                        })
-                    };
-                    segment().with_context(|| format!("in `{}`", path(i)))
-                })
-                .collect::<Result<Vec<_>>>()
-        };
-
+        let separator = self.compile_separator(&self.separator, &scope, "separator")?;
         let lines = match &self.segments {
-            Segments::Line(specs) => vec![compile_line(specs, &|i| format!("segments[{i}]"))?],
+            Segments::Line(specs) => {
+                vec![compile_line(specs, &scope, &|i| format!("segments[{i}]"))?]
+            }
             Segments::Lines(lines) => lines
                 .iter()
                 .enumerate()
-                .map(|(l, specs)| compile_line(specs, &|i| format!("segments[{l}][{i}]")))
+                .map(|(l, specs)| compile_line(specs, &scope, &|i| format!("segments[{l}][{i}]")))
                 .collect::<Result<_>>()?,
         };
 
@@ -227,6 +224,92 @@ impl Config {
             lines,
         })
     }
+
+    /// Validates the `[subagent]` templates into a single-line [`Layout`],
+    /// rendered once per subagent.
+    pub fn compile_subagent(&self) -> Result<Layout> {
+        let palette = self.palette()?;
+        let icons = self.icons();
+        let scope = Scope {
+            icons: &icons,
+            palette: &palette,
+            names: vars::SUBAGENT_NAMES,
+        };
+
+        let sub = &self.subagent;
+        let separator = self.compile_separator(&sub.separator, &scope, "subagent.separator")?;
+        let line = compile_line(&sub.segments, &scope, &|i| {
+            format!("subagent.segments[{i}]")
+        })?;
+
+        Ok(Layout {
+            mode: self.color_mode,
+            palette,
+            separator,
+            lines: vec![line],
+        })
+    }
+
+    /// Built-in colors and [`DEFAULT_COLORS`], with `[colors]` merged over.
+    fn palette(&self) -> Result<Palette> {
+        let builtins = style::builtin_palette();
+        let mut palette = builtins.clone();
+        palette.extend(DEFAULT_COLORS.map(|(name, color)| (name.to_owned(), color)));
+        for (name, spec) in &self.colors {
+            let color = spec
+                .resolve(&builtins)
+                .with_context(|| format!("invalid color for `colors.{name}`"))?;
+            palette.insert(name.clone(), color);
+        }
+        Ok(palette)
+    }
+
+    /// [`DEFAULT_ICONS`] with `[icons]` merged over.
+    fn icons(&self) -> BTreeMap<String, String> {
+        let mut icons: BTreeMap<String, String> = DEFAULT_ICONS
+            .iter()
+            .map(|&(name, icon)| (name.to_owned(), icon.to_owned()))
+            .collect();
+        icons.extend(self.icons.clone());
+        icons
+    }
+
+    /// Parses and pre-renders a separator, which may not use values.
+    fn compile_separator(&self, source: &str, scope: &Scope<'_>, path: &str) -> Result<String> {
+        let separator = Template::parse(source, scope).with_context(|| format!("in `{path}`"))?;
+        if separator.uses_vars() {
+            bail!("`{path}` cannot reference values");
+        }
+        Ok(separator
+            .render(&Vars::new(), scope.palette, self.color_mode)
+            .unwrap_or_default())
+    }
+}
+
+fn compile_line(
+    specs: &[SegmentSpec],
+    scope: &Scope<'_>,
+    path: &dyn Fn(usize) -> String,
+) -> Result<Vec<Segment>> {
+    specs
+        .iter()
+        .enumerate()
+        .map(|(i, spec)| {
+            let (format, when) = match spec {
+                SegmentSpec::Format(format) => (format, None),
+                SegmentSpec::When { format, when } => (format, Some(when)),
+            };
+            let segment = || -> Result<Segment> {
+                Ok(Segment {
+                    template: Template::parse(format, scope)?,
+                    when: when
+                        .map(|w| template::var_name(w, scope.names))
+                        .transpose()?,
+                })
+            };
+            segment().with_context(|| format!("in `{}`", path(i)))
+        })
+        .collect()
 }
 
 /// Context window accounting and status thresholds.
@@ -400,6 +483,71 @@ mod tests {
     }
 
     #[test]
+    fn default_subagent_layout_compiles() -> Result<()> {
+        let vars = vec![
+            ("agent.name", Value::Text("Explore".into())),
+            ("agent.elapsed", Value::Duration(90)),
+        ];
+        let line = parse("color_mode = \"none\"")?
+            .compile_subagent()?
+            .render(&vars);
+        assert_eq!(line, "Explore │ 1m");
+        Ok(())
+    }
+
+    #[test]
+    fn parses_subagent_table() -> Result<()> {
+        let config = parse(
+            r#"
+            [subagent]
+            separator = " · "
+            segments = ["{agent.name}", { format = "{agent.status}", when = "agent.status" }]
+            [subagent.context]
+            reserved_tokens = 0
+            "#,
+        )?;
+        assert_eq!(config.subagent.separator, " · ");
+        assert_eq!(config.subagent.segments.len(), 2);
+        assert_eq!(config.subagent.context.reserved_tokens, 0);
+        assert!((config.subagent.context.danger_at - 86.0).abs() < f64::EPSILON);
+        assert_eq!(config.context.reserved_tokens, 20_000);
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_invalid_subagent_layouts() {
+        for toml in [
+            "[subagent]\nbogus = true",
+            "[subagent.context]\nbogus = true",
+            r#"subagent.segments = [["{agent.name}"]]"#,
+            r#"subagent.segments = ["{git.branch}"]"#,
+            r#"subagent.segments = [{ format = "x", when = "cost.total_usd" }]"#,
+            r#"subagent.separator = "{agent.name}""#,
+        ] {
+            let result = parse(toml).and_then(|c| c.compile_subagent().map(|_| ()));
+            assert!(result.is_err(), "{toml:?} should fail");
+        }
+    }
+
+    #[test]
+    fn subagent_values_are_rejected_in_main_segments() {
+        assert!(
+            parse(r#"segments = ["{agent.name}"]"#)
+                .and_then(|c| c.compile().map(|_| ()))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn subagent_segment_errors_name_the_index() -> Result<()> {
+        let Err(err) = parse(r#"subagent.segments = ["ok", "{nope}"]"#)?.compile_subagent() else {
+            anyhow::bail!("expected an error");
+        };
+        assert!(format!("{err:#}").contains("subagent.segments[1]"));
+        Ok(())
+    }
+
+    #[test]
     fn parses_segment_forms() -> Result<()> {
         let config =
             parse(r#"segments = ["a", { format = "b", when = "model.thinking.enabled" }]"#)?;
@@ -523,10 +671,10 @@ mod tests {
     }
 
     /// A value for every name, so every default segment renders.
-    fn all_vars() -> Vars {
-        use crate::{status::Level, vars::NAMES};
+    fn all_vars(names: &'static [&'static str]) -> Vars {
+        use crate::status::Level;
 
-        NAMES
+        names
             .iter()
             .map(|&name| {
                 let value = match name {
@@ -545,7 +693,7 @@ mod tests {
 
     #[test]
     fn template_matches_defaults() -> Result<()> {
-        let full = all_vars();
+        let full = all_vars(vars::NAMES);
         let sparse: Vars = full
             .iter()
             .filter(|(name, _)| !name.starts_with("git.") && !name.starts_with("cost."))
@@ -569,8 +717,30 @@ mod tests {
     }
 
     #[test]
+    fn template_matches_subagent_defaults() -> Result<()> {
+        let full = all_vars(vars::SUBAGENT_NAMES);
+        let sparse: Vars = full
+            .iter()
+            .filter(|(name, _)| !name.starts_with("context.") && !name.starts_with("model."))
+            .cloned()
+            .collect();
+
+        for mode in ["256", "none"] {
+            let mode_line = format!("color_mode = \"{mode}\"\n");
+            let template = TEMPLATE.replace("color_mode = \"truecolor\"\n", &mode_line);
+            let template = parse(&template)?.compile_subagent()?;
+            let defaults = parse(&mode_line)?.compile_subagent()?;
+
+            for vars in [&full, &sparse, &Vars::new()] {
+                assert_eq!(template.render(vars), defaults.render(vars), "mode {mode}");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn template_documents_every_value() {
-        for name in crate::vars::NAMES {
+        for name in vars::NAMES.iter().chain(vars::SUBAGENT_NAMES) {
             assert!(TEMPLATE.contains(name), "{name} is not documented");
         }
     }

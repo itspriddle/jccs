@@ -1,0 +1,17 @@
+{
+  "tasks": [
+    {
+      "id": "t1",
+      "name": "Explore",
+      "type": "local_agent",
+      "agentType": "Explore",
+      "status": "running",
+      "description": "map the auth flow",
+      "model": "claude-opus-5",
+      "tokenCount": 42150,
+      "contextWindowSize": 200000,
+      "startTime": 1793085062000
+    }
+  ],
+  "columns": 80
+}

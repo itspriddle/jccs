@@ -180,3 +180,55 @@ reserved_tokens = 20000
 caution_at = 76.0
 # context.used_pct at which context.level becomes "danger".
 danger_at = 86.0
+
+# ---------------------------------------------------------------------------
+# Subagent statusline
+# ---------------------------------------------------------------------------
+#
+# Claude Code's subagent statusline (`subagentStatusLine` in settings.json,
+# added by `jccs install`) shows one row per running subagent. jccs renders
+# each row from the segments below. Templates work as above, and [icons],
+# [colors], and color_mode are shared with the main statusline. Main
+# statusline values aren't available here; these are:
+#
+#   agent.name                       text        Explore  (its name, or else its agent type)
+#   agent.type                       text        Explore
+#   agent.description                text        map the auth flow
+#   agent.status                     text        running
+#   agent.elapsed                    duration    3m       (since it started)
+#
+#   model.display_name               text        Opus 5   ("(1M)" only with a 1M context)
+#   model.family                     text        Opus, Sonnet, Haiku, or Fable
+#   model.version                    text        5
+#
+#   context.size                     integer     200000
+#   context.size_short               tokens      200K
+#   context.1m_tokens                bool        false
+#   context.reserved_tokens          integer     20000
+#   context.used_tokens              integer     42150
+#   context.used_tokens_short        tokens      42K
+#   context.used_pct                 percent     23%     (of size - reserved)
+#   context.remaining_pct            percent     77%
+#   context.level                    level       good, caution, or danger
+#
+# Try it with a sample payload:
+#
+#   jccs vars < docs/subagent-schema.json
+[subagent]
+# Placed between rendered segments. It may use styles and icons, not values.
+separator = " [dim]│[/] "
+
+# One row per subagent, so a flat array only. Segments work as above,
+# including `{ format = "...", when = "<value>" }`.
+segments = [
+  "[bold]{agent.name}[/]",
+  "{model.display_name}",
+  "[$context.level]{icon.context} {context.used_pct}[/]",
+  "{agent.elapsed}",
+]
+
+# Context window accounting for subagents; works like [context] above.
+[subagent.context]
+reserved_tokens = 20000
+caution_at = 76.0
+danger_at = 86.0
