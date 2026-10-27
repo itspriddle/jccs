@@ -21,13 +21,15 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::{
     config::{Config, SegmentSpec, Segments},
-    input::StatusInput,
-    status::{Env, Status},
+    input::{Input, StatusInput, SubagentInput},
+    status::{Env, Status, SubagentStatus},
     style::ColorMode,
 };
 
 /// Josh's Claude Code Statusline. Reads Claude Code's statusline JSON on
 /// stdin and prints the line described by `~/.config/jccs/config.toml`.
+/// A subagent statusline payload (one with `tasks`) prints one JSON row per
+/// subagent instead.
 #[derive(Parser)]
 #[command(version, args_conflicts_with_subcommands = true)]
 struct Cli {
@@ -54,18 +56,18 @@ enum Command {
         #[arg(short, long)]
         force: bool,
     },
-    /// Set jccs as the statusline in Claude Code's settings.json and create
-    /// the config file if it is missing.
+    /// Set jccs as the statusline and subagent statusline in Claude Code's
+    /// settings.json and create the config file if it is missing.
     Install {
-        /// Replace an existing statusLine and config file.
+        /// Replace an existing statusLine, subagentStatusLine, and config file.
         #[arg(short, long)]
         overwrite: bool,
         /// Don't ask for confirmation.
         #[arg(long)]
         yes: bool,
     },
-    /// Remove the jccs statusLine from Claude Code's settings.json and delete
-    /// the config directory.
+    /// Remove the jccs statusLine and subagentStatusLine from Claude Code's
+    /// settings.json and delete the config directory.
     Uninstall {
         /// Don't ask for confirmation.
         #[arg(long)]
@@ -111,25 +113,53 @@ fn main() -> ExitCode {
 fn render(args: RenderArgs) -> Result<()> {
     let mut config = config::load(args.config.as_deref())?;
 
-    if let Some(format) = args.format {
-        config.segments = Segments::Line(vec![SegmentSpec::Format(format)]);
-    }
     if let Some(mode) = args.color_mode {
         config.color_mode = mode;
     } else if env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()) {
         config.color_mode = ColorMode::None;
     }
 
-    let layout = config.compile()?;
-    let status = read_status(&config)?;
-    println!("{}", layout.render(&status.vars()));
+    match read_input()? {
+        Input::Status(input) => {
+            if let Some(format) = args.format {
+                config.segments = Segments::Line(vec![SegmentSpec::Format(format)]);
+            }
+            let layout = config.compile()?;
+            let status = status(&input, &config)?;
+            println!("{}", layout.render(&status.vars()));
+        }
+        Input::Subagent(input) => {
+            if let Some(format) = args.format {
+                config.subagent.segments = vec![SegmentSpec::Format(format)];
+            }
+            let layout = config.compile_subagent()?;
+            // One JSON object per line; Claude Code matches rows to
+            // subagents by `id`, so tasks without one are skipped.
+            for (id, status) in subagents(&input, &config)? {
+                let row = serde_json::json!({ "id": id, "content": layout.render(&status.vars()) });
+                println!("{row}");
+            }
+        }
+    }
     Ok(())
 }
 
 fn print_vars(config_path: Option<&Path>) -> Result<()> {
     let config = config::load(config_path)?;
-    for (name, value) in read_status(&config)?.vars() {
-        println!("{name} = {value}");
+    match read_input()? {
+        Input::Status(input) => {
+            for (name, value) in status(&input, &config)?.vars() {
+                println!("{name} = {value}");
+            }
+        }
+        Input::Subagent(input) => {
+            for (id, status) in subagents(&input, &config)? {
+                println!("# {id}");
+                for (name, value) in status.vars() {
+                    println!("{name} = {value}");
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -144,16 +174,18 @@ fn configure(force: bool) -> Result<()> {
     Ok(())
 }
 
-fn read_status(config: &Config) -> Result<Status> {
+fn read_input() -> Result<Input> {
     // Skip reading when run interactively so the binary doesn't hang
     // waiting for input that Claude Code would normally pipe in.
     let stdin = io::stdin();
-    let input = if stdin.is_terminal() {
-        StatusInput::default()
+    if stdin.is_terminal() {
+        Ok(Input::Status(Box::default()))
     } else {
-        input::read(stdin.lock())?
-    };
+        input::read(stdin.lock())
+    }
+}
 
+fn status(input: &StatusInput, config: &Config) -> Result<Status> {
     let dir = input
         .workspace
         .as_ref()
@@ -174,7 +206,26 @@ fn read_status(config: &Config) -> Result<Status> {
             .and_then(|state| ledger::today_usd(&state, &ledger::today(), session)),
     };
 
-    Ok(Status::from_input(&input, &env, config))
+    Ok(Status::from_input(input, &env, config))
+}
+
+/// Each subagent that has an `id`, paired with its derived values.
+fn subagents<'a>(
+    input: &'a SubagentInput,
+    config: &Config,
+) -> Result<Vec<(&'a str, SubagentStatus)>> {
+    let now = unix_now()?;
+    Ok(input
+        .tasks
+        .iter()
+        .filter_map(|task| {
+            let id = task.id.as_deref()?;
+            Some((
+                id,
+                SubagentStatus::from_task(task, now, &config.subagent.context),
+            ))
+        })
+        .collect())
 }
 
 fn unix_now() -> Result<i64> {

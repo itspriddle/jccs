@@ -13,6 +13,10 @@ use serde_json::{Map, Value, json};
 use crate::{config, ledger};
 
 const STATUS_LINE: &str = "statusLine";
+const SUBAGENT_STATUS_LINE: &str = "subagentStatusLine";
+
+/// Every settings key jccs installs, in install order.
+const KEYS: [&str; 2] = [STATUS_LINE, SUBAGENT_STATUS_LINE];
 
 /// Everything install and uninstall touch.
 struct Paths {
@@ -57,11 +61,13 @@ fn claude_settings_path() -> Option<PathBuf> {
 enum Action {
     SetStatusLine {
         settings: PathBuf,
+        key: &'static str,
         command: String,
         replacing: Option<String>,
     },
     RemoveStatusLine {
         settings: PathBuf,
+        key: &'static str,
     },
     WriteConfig {
         path: PathBuf,
@@ -76,24 +82,26 @@ impl fmt::Display for Action {
         match self {
             Self::SetStatusLine {
                 settings,
+                key,
                 command,
                 replacing: None,
             } => write!(
                 f,
-                "add statusLine to {} (command: {command})",
+                "add {key} to {} (command: {command})",
                 settings.display()
             ),
             Self::SetStatusLine {
                 settings,
+                key,
                 command,
                 replacing: Some(old),
             } => write!(
                 f,
-                "replace statusLine in {} (command: {old} -> {command})",
+                "replace {key} in {} (command: {old} -> {command})",
                 settings.display()
             ),
-            Self::RemoveStatusLine { settings } => {
-                write!(f, "remove statusLine from {}", settings.display())
+            Self::RemoveStatusLine { settings, key } => {
+                write!(f, "remove {key} from {}", settings.display())
             }
             Self::WriteConfig {
                 path,
@@ -140,9 +148,9 @@ pub fn uninstall(yes: bool) -> Result<()> {
         config_dir: paths.config_dir().is_some_and(Path::exists),
         state_dir: paths.state.as_deref().is_some_and(Path::exists),
     };
-    let (actions, warning) = plan_uninstall(settings.as_ref(), &paths, existing);
+    let (actions, warnings) = plan_uninstall(settings.as_ref(), &paths, existing);
 
-    if let Some(warning) = warning {
+    for warning in warnings {
         println!("warning: {warning}");
     }
 
@@ -171,28 +179,38 @@ fn plan_install(
 ) -> Result<Vec<Action>> {
     let command = shell_quote(&paths.exe);
     let mut actions = Vec::new();
+    let mut conflicts = Vec::new();
 
-    match settings.and_then(|s| s.get(STATUS_LINE)) {
-        None => actions.push(Action::SetStatusLine {
-            settings: paths.settings.clone(),
-            command,
-            replacing: None,
-        }),
-        Some(existing) if status_command(existing) == Some(command.as_str()) => {}
-        Some(existing) => {
-            let old = describe(existing);
-            if !overwrite {
-                bail!(
-                    "{} already has a statusLine: {old}\npass --overwrite to replace it",
-                    paths.settings.display()
-                );
+    for key in KEYS {
+        let replacing = match settings.and_then(|s| s.get(key)) {
+            None => None,
+            Some(existing) if status_command(existing) == Some(command.as_str()) => continue,
+            Some(existing) => {
+                let old = describe(existing);
+                if !overwrite {
+                    conflicts.push(format!(
+                        "{} already has a {key}: {old}",
+                        paths.settings.display()
+                    ));
+                    continue;
+                }
+                Some(old)
             }
-            actions.push(Action::SetStatusLine {
-                settings: paths.settings.clone(),
-                command,
-                replacing: Some(old),
-            });
-        }
+        };
+        actions.push(Action::SetStatusLine {
+            settings: paths.settings.clone(),
+            key,
+            command: command.clone(),
+            replacing,
+        });
+    }
+
+    if !conflicts.is_empty() {
+        bail!(
+            "{}\npass --overwrite to replace {}",
+            conflicts.join("\n"),
+            if conflicts.len() == 1 { "it" } else { "them" }
+        );
     }
 
     if !config_exists || overwrite {
@@ -205,8 +223,6 @@ fn plan_install(
     Ok(actions)
 }
 
-/// Returns the actions plus a warning when the statusLine belongs to
-/// something other than jccs and is left alone.
 /// Which jccs directories are present on disk.
 #[derive(Debug, Default, Clone, Copy)]
 struct Existing {
@@ -214,22 +230,28 @@ struct Existing {
     state_dir: bool,
 }
 
+/// Returns the actions plus a warning for each status line that belongs to
+/// something other than jccs and is left alone.
 fn plan_uninstall(
     settings: Option<&Value>,
     paths: &Paths,
     existing: Existing,
-) -> (Vec<Action>, Option<String>) {
+) -> (Vec<Action>, Vec<String>) {
     let mut actions = Vec::new();
-    let mut warning = None;
+    let mut warnings = Vec::new();
 
-    if let Some(existing) = settings.and_then(|s| s.get(STATUS_LINE)) {
+    for key in KEYS {
+        let Some(existing) = settings.and_then(|s| s.get(key)) else {
+            continue;
+        };
         if status_command(existing).is_some_and(|cmd| is_jccs_command(cmd, &paths.exe)) {
             actions.push(Action::RemoveStatusLine {
                 settings: paths.settings.clone(),
+                key,
             });
         } else {
-            warning = Some(format!(
-                "leaving statusLine in {}, it does not run jccs: {}",
+            warnings.push(format!(
+                "leaving {key} in {}, it does not run jccs: {}",
                 paths.settings.display(),
                 describe(existing)
             ));
@@ -243,7 +265,7 @@ fn plan_uninstall(
         actions.push(Action::RemoveStateDir(dir.clone()));
     }
 
-    (actions, warning)
+    (actions, warnings)
 }
 
 fn status_command(status_line: &Value) -> Option<&str> {
@@ -320,15 +342,19 @@ fn apply(settings: Option<Value>, actions: &[Action]) -> Result<()> {
         match action {
             Action::SetStatusLine {
                 settings: path,
+                key,
                 command,
                 ..
             } => {
-                set_status_line(&mut settings, command);
+                set_status_line(&mut settings, key, command);
                 write_settings(path, &settings)?;
             }
-            Action::RemoveStatusLine { settings: path } => {
+            Action::RemoveStatusLine {
+                settings: path,
+                key,
+            } => {
                 if let Some(map) = settings.as_object_mut() {
-                    map.shift_remove(STATUS_LINE);
+                    map.shift_remove(*key);
                 }
                 write_settings(path, &settings)?;
             }
@@ -346,12 +372,14 @@ fn apply(settings: Option<Value>, actions: &[Action]) -> Result<()> {
     Ok(())
 }
 
-fn set_status_line(settings: &mut Value, command: &str) {
+fn set_status_line(settings: &mut Value, key: &str, command: &str) {
+    let entry = if key == STATUS_LINE {
+        json!({ "type": "command", "command": command, "padding": 0, "refreshInterval": 60 })
+    } else {
+        json!({ "type": "command", "command": command })
+    };
     if let Some(map) = settings.as_object_mut() {
-        map.insert(
-            STATUS_LINE.to_owned(),
-            json!({ "type": "command", "command": command, "padding": 0, "refreshInterval": 60 }),
-        );
+        map.insert(key.to_owned(), entry);
     }
 }
 
@@ -417,6 +445,29 @@ mod tests {
         json!({ "model": "opus", STATUS_LINE: { "type": "command", "command": command } })
     }
 
+    fn with_commands(main: &str, subagent: &str) -> Value {
+        json!({
+            STATUS_LINE: { "type": "command", "command": main },
+            SUBAGENT_STATUS_LINE: { "type": "command", "command": subagent },
+        })
+    }
+
+    fn set(key: &'static str, replacing: Option<&str>) -> Action {
+        Action::SetStatusLine {
+            settings: paths().settings,
+            key,
+            command: "/usr/local/bin/jccs".into(),
+            replacing: replacing.map(str::to_owned),
+        }
+    }
+
+    fn remove(key: &'static str) -> Action {
+        Action::RemoveStatusLine {
+            settings: paths().settings,
+            key,
+        }
+    }
+
     /// A fresh directory per test; tests run in parallel in one process.
     fn temp_dir(name: &str) -> Result<PathBuf> {
         let dir = env::temp_dir().join(format!("jccs-install-{name}-{}", std::process::id()));
@@ -430,11 +481,8 @@ mod tests {
         assert_eq!(
             actions,
             [
-                Action::SetStatusLine {
-                    settings: paths().settings,
-                    command: "/usr/local/bin/jccs".into(),
-                    replacing: None,
-                },
+                set(STATUS_LINE, None),
+                set(SUBAGENT_STATUS_LINE, None),
                 Action::WriteConfig {
                     path: paths().config,
                     overwrite: false,
@@ -447,23 +495,52 @@ mod tests {
     #[test]
     fn install_preserves_other_settings_in_order() {
         let mut settings = json!({ "zeta": 1, "alpha": 2 });
-        set_status_line(&mut settings, "/usr/local/bin/jccs");
+        set_status_line(&mut settings, STATUS_LINE, "/usr/local/bin/jccs");
+        set_status_line(&mut settings, SUBAGENT_STATUS_LINE, "/usr/local/bin/jccs");
         let keys: Vec<&str> = settings
             .as_object()
             .map(|m| m.keys().map(String::as_str).collect())
             .unwrap_or_default();
-        assert_eq!(keys, ["zeta", "alpha", STATUS_LINE]);
+        assert_eq!(keys, ["zeta", "alpha", STATUS_LINE, SUBAGENT_STATUS_LINE]);
         assert_eq!(
             settings[STATUS_LINE],
             json!({ "type": "command", "command": "/usr/local/bin/jccs", "padding": 0, "refreshInterval": 60 })
+        );
+        assert_eq!(
+            settings[SUBAGENT_STATUS_LINE],
+            json!({ "type": "command", "command": "/usr/local/bin/jccs" })
         );
     }
 
     #[test]
     fn install_is_a_noop_when_already_installed() -> Result<()> {
-        let settings = with_command("/usr/local/bin/jccs");
+        let settings = with_commands("/usr/local/bin/jccs", "/usr/local/bin/jccs");
         assert_eq!(plan_install(Some(&settings), &paths(), true, false)?, []);
         Ok(())
+    }
+
+    #[test]
+    fn install_adds_missing_subagent_statusline() -> Result<()> {
+        let settings = with_command("/usr/local/bin/jccs");
+        assert_eq!(
+            plan_install(Some(&settings), &paths(), true, false)?,
+            [set(SUBAGENT_STATUS_LINE, None)]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn install_refuses_to_replace_another_subagent_statusline() {
+        let settings = with_commands("/usr/local/bin/jccs", "agents.sh");
+        let Err(err) = plan_install(Some(&settings), &paths(), true, false) else {
+            panic!("expected an error");
+        };
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("subagentStatusLine: agents.sh"),
+            "{message}"
+        );
+        assert!(message.contains("--overwrite"), "{message}");
     }
 
     #[test]
@@ -479,16 +556,13 @@ mod tests {
 
     #[test]
     fn install_overwrite_replaces_statusline_and_config() -> Result<()> {
-        let settings = with_command("ccstatusline");
+        let settings = with_commands("ccstatusline", "agents.sh");
         let actions = plan_install(Some(&settings), &paths(), true, true)?;
         assert_eq!(
             actions,
             [
-                Action::SetStatusLine {
-                    settings: paths().settings,
-                    command: "/usr/local/bin/jccs".into(),
-                    replacing: Some("ccstatusline".into()),
-                },
+                set(STATUS_LINE, Some("ccstatusline")),
+                set(SUBAGENT_STATUS_LINE, Some("agents.sh")),
                 Action::WriteConfig {
                     path: paths().config,
                     overwrite: true,
@@ -500,38 +574,42 @@ mod tests {
 
     #[test]
     fn uninstall_removes_jccs_statusline_and_dirs() {
-        let settings = with_command("/opt/homebrew/bin/jccs");
+        let settings = with_commands("/opt/homebrew/bin/jccs", "/opt/homebrew/bin/jccs");
         let existing = Existing {
             config_dir: true,
             state_dir: true,
         };
-        let (actions, warning) = plan_uninstall(Some(&settings), &paths(), existing);
+        let (actions, warnings) = plan_uninstall(Some(&settings), &paths(), existing);
         assert_eq!(
             actions,
             [
-                Action::RemoveStatusLine {
-                    settings: paths().settings
-                },
+                remove(STATUS_LINE),
+                remove(SUBAGENT_STATUS_LINE),
                 Action::RemoveConfigDir(PathBuf::from("/home/me/.config/jccs")),
                 Action::RemoveStateDir(PathBuf::from("/home/me/.local/state/jccs")),
             ]
         );
-        assert_eq!(warning, None);
+        assert_eq!(warnings, Vec::<String>::new());
     }
 
     #[test]
     fn uninstall_leaves_other_statuslines() {
         let settings = with_command("ccstatusline");
-        let (actions, warning) = plan_uninstall(Some(&settings), &paths(), Existing::default());
+        let (actions, warnings) = plan_uninstall(Some(&settings), &paths(), Existing::default());
         assert_eq!(actions, []);
-        assert!(warning.is_some_and(|w| w.contains("ccstatusline")));
+        assert!(matches!(warnings.as_slice(), [w] if w.contains("ccstatusline")));
+
+        let settings = with_commands("/usr/local/bin/jccs", "agents.sh");
+        let (actions, warnings) = plan_uninstall(Some(&settings), &paths(), Existing::default());
+        assert_eq!(actions, [remove(STATUS_LINE)]);
+        assert!(matches!(warnings.as_slice(), [w] if w.contains("subagentStatusLine")));
     }
 
     #[test]
     fn uninstall_with_nothing_installed() {
-        let (actions, warning) = plan_uninstall(Some(&json!({})), &paths(), Existing::default());
+        let (actions, warnings) = plan_uninstall(Some(&json!({})), &paths(), Existing::default());
         assert_eq!(actions, []);
-        assert_eq!(warning, None);
+        assert_eq!(warnings, Vec::<String>::new());
     }
 
     #[test]

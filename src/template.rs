@@ -42,6 +42,8 @@ enum Open {
 pub struct Scope<'a> {
     pub icons: &'a BTreeMap<String, String>,
     pub palette: &'a Palette,
+    /// Value names templates may reference, e.g. [`vars::NAMES`].
+    pub names: &'static [&'static str],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,7 +98,7 @@ impl Template {
                                 .ok_or_else(|| anyhow!("unbalanced group"))?
                                 .push(Node::Group { when, nodes });
                         } else if let Some(name) = inner.strip_prefix('?') {
-                            open.push(Open::Group(var_name(name.trim())?));
+                            open.push(Open::Group(var_name(name.trim(), scope.names)?));
                             levels.push(Vec::new());
                         } else {
                             nodes.push(parse_value(inner, scope)?);
@@ -109,7 +111,7 @@ impl Template {
                     } else {
                         open.push(Open::Style);
                         nodes.push(match inner.strip_prefix('$') {
-                            Some(name) => Node::PushVar(var_name(name)?),
+                            Some(name) => Node::PushVar(var_name(name, scope.names)?),
                             None => Node::Push(Style::parse(inner, scope.palette)?),
                         });
                     }
@@ -218,13 +220,14 @@ fn parse_value(inner: &str, scope: &Scope<'_>) -> Result<Node> {
             Some(icon) => Ok(Node::Text(icon.clone())),
             None => bail!("unknown icon `{name}`; define it under [icons]"),
         },
-        None => Ok(Node::Var(var_name(inner)?)),
+        None => Ok(Node::Var(var_name(inner, scope.names)?)),
     }
 }
 
-/// Resolves a value name to its `'static` form, rejecting unknown names.
-pub fn var_name(name: &str) -> Result<&'static str> {
-    match vars::NAMES.iter().find(|&&n| n == name) {
+/// Resolves a value name to its `'static` form, rejecting names not in
+/// `names`.
+pub fn var_name(name: &str, names: &'static [&'static str]) -> Result<&'static str> {
+    match names.iter().find(|&&n| n == name) {
         Some(&n) => Ok(n),
         None => bail!("unknown value `{name}`; run `jccs vars` to list values"),
     }
@@ -256,6 +259,7 @@ mod tests {
             &Scope {
                 icons: &icons,
                 palette: &palette,
+                names: vars::NAMES,
             },
         )
     }
