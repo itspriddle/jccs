@@ -15,7 +15,7 @@
 use std::io::Read;
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 #[derive(Debug, Default, Deserialize)]
 pub struct StatusInput {
@@ -120,6 +120,7 @@ pub struct Worktree {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct SubagentInput {
+    #[serde(deserialize_with = "lenient_tasks")]
     pub tasks: Vec<Task>,
     pub columns: Option<u16>,
 }
@@ -139,6 +140,18 @@ pub struct Task {
     pub context_window_size: Option<u64>,
     /// Unix timestamp (milliseconds).
     pub start_time: Option<i64>,
+}
+
+/// Parses `tasks` one entry at a time, skipping any that don't parse, so one
+/// malformed task (or a non-array `tasks`) doesn't hide every row.
+fn lenient_tasks<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<Task>, D::Error> {
+    let serde_json::Value::Array(tasks) = serde_json::Value::deserialize(deserializer)? else {
+        return Ok(Vec::new());
+    };
+    Ok(tasks
+        .into_iter()
+        .filter_map(|task| serde_json::from_value(task).ok())
+        .collect())
 }
 
 /// A main statusline or subagent statusline payload.
@@ -242,6 +255,19 @@ mod tests {
         assert_eq!(task.token_count, Some(42_150));
         assert_eq!(task.context_window_size, Some(200_000));
         assert_eq!(task.start_time, Some(1_793_085_062_000));
+        Ok(())
+    }
+
+    #[test]
+    fn skips_malformed_tasks() -> Result<()> {
+        assert!(read_subagent(r#"{"tasks":null}"#)?.tasks.is_empty());
+        assert!(read_subagent(r#"{"tasks":"nope"}"#)?.tasks.is_empty());
+
+        let input = read_subagent(
+            r#"{"tasks":[{"id":1},"nope",{"id":"t2","tokenCount":1.5},{"id":"t3"}]}"#,
+        )?;
+        let ids: Vec<_> = input.tasks.iter().map(|t| t.id.as_deref()).collect();
+        assert_eq!(ids, [Some("t3")]);
         Ok(())
     }
 

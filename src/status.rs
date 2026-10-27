@@ -197,7 +197,8 @@ impl SubagentStatus {
             description: task.description.clone(),
             status: task.status.clone(),
             elapsed: task.start_time.map(|ms| (now - ms / 1_000).max(0)),
-            model: ModelStatus::from_id(task.model.as_deref(), None, million_tokens),
+            // Unrecognized IDs and aliases like `sonnet` show as given.
+            model: ModelStatus::from_id(task.model.as_deref(), task.model.clone(), million_tokens),
             context,
         }
     }
@@ -644,6 +645,17 @@ mod tests {
         let ctx = status.context;
         assert_eq!(ctx.as_ref().map(|c| c.used_tokens), Some(90_000));
         assert!(ctx.is_some_and(|c| (c.used_pct - 50.0).abs() < f64::EPSILON));
+    }
+
+    #[test]
+    fn subagent_shows_unrecognized_models_as_given() {
+        let task = Task {
+            model: Some("sonnet".into()),
+            ..task()
+        };
+        let status = SubagentStatus::from_task(&task, 0, &ContextConfig::default());
+        assert_eq!(status.model.display_name.as_deref(), Some("sonnet"));
+        assert_eq!(status.model.family, None);
     }
 
     #[test]
