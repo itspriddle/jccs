@@ -102,6 +102,8 @@ pub const NAMES: &[&str] = &[
     CONTEXT[6],
     CONTEXT[7],
     CONTEXT[8],
+    CONTEXT[9],
+    CONTEXT[10],
     "context.reported_used_pct",
     "context.reported_remaining_pct",
     "git.branch",
@@ -132,11 +134,13 @@ pub const SUBAGENT_NAMES: &[&str] = &[
     CONTEXT[6],
     CONTEXT[7],
     CONTEXT[8],
+    CONTEXT[9],
+    CONTEXT[10],
 ];
 
 /// Context names shared by the main and subagent statuslines, in output
 /// order.
-const CONTEXT: [&str; 9] = [
+const CONTEXT: [&str; 11] = [
     "context.size",
     "context.size_short",
     "context.1m_tokens",
@@ -146,6 +150,8 @@ const CONTEXT: [&str; 9] = [
     "context.used_pct",
     "context.remaining_pct",
     "context.level",
+    "context.bar.used",
+    "context.bar.remaining",
 ];
 
 pub fn lookup<'a>(vars: &'a Vars, name: &str) -> Option<&'a Value> {
@@ -268,6 +274,8 @@ fn push_context(push: &mut impl FnMut(&'static str, Option<Value>), c: &ContextS
         used_pct,
         remaining_pct,
         level,
+        bar_used,
+        bar_remaining,
     ] = CONTEXT;
     push(size, Some(Value::Int(c.size)));
     push(size_short, Some(Value::Tokens(c.size)));
@@ -278,6 +286,8 @@ fn push_context(push: &mut impl FnMut(&'static str, Option<Value>), c: &ContextS
     push(used_pct, Some(Value::Percent(c.used_pct)));
     push(remaining_pct, Some(Value::Percent(c.remaining_pct)));
     push(level, Some(Value::Level(c.level)));
+    push(bar_used, Some(Value::Text(c.bar_used.clone())));
+    push(bar_remaining, Some(Value::Text(c.bar_remaining.clone())));
 }
 
 /// Variable names for one rate-limit window, in output order.
@@ -421,6 +431,8 @@ mod tests {
                 level: Level::Good,
                 reported_used_pct: Some(1.0),
                 reported_remaining_pct: Some(99.0),
+                bar_used: String::new(),
+                bar_remaining: "─".into(),
             }),
             git: GitStatus {
                 branch: Some("main".into()),
@@ -462,6 +474,8 @@ mod tests {
                 level: Level::Good,
                 reported_used_pct: None,
                 reported_remaining_pct: None,
+                bar_used: String::new(),
+                bar_remaining: "─".into(),
             }),
         };
         let names: Vec<_> = status.vars().into_iter().map(|(n, _)| n).collect();

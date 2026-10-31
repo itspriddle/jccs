@@ -322,6 +322,12 @@ pub struct ContextConfig {
     pub caution_at: f64,
     /// Used percentage at which the context status becomes "danger".
     pub danger_at: f64,
+    /// Cells in the `context.bar.*` progress bar.
+    pub bar_width: u8,
+    /// Repeated once per used cell of the bar.
+    pub bar_used: String,
+    /// Repeated once per remaining cell of the bar.
+    pub bar_remaining: String,
 }
 
 impl Default for ContextConfig {
@@ -330,6 +336,9 @@ impl Default for ContextConfig {
             reserved_tokens: 20_000,
             caution_at: 76.0,
             danger_at: 86.0,
+            bar_width: 10,
+            bar_used: "━".to_owned(),
+            bar_remaining: "─".to_owned(),
         }
     }
 }

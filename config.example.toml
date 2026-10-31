@@ -84,6 +84,8 @@
 #   context.used_pct                 percent     50%     (of size - reserved)
 #   context.remaining_pct            percent     50%
 #   context.level                    level       good, caution, or danger
+#   context.bar.used                 text        ━━━━━    (used part of the bar)
+#   context.bar.remaining            text        ─────    (remaining part)
 #   context.reported_used_pct        percent     45%     (as Claude Code reports)
 #   context.reported_remaining_pct   percent     55%
 #
@@ -180,6 +182,14 @@ reserved_tokens = 20000
 caution_at = 76.0
 # context.used_pct at which context.level becomes "danger".
 danger_at = 86.0
+# The context.bar.* progress bar: bar_width cells (0-255), split by
+# context.used_pct into bar_used and bar_remaining repeats. Style each part
+# separately, e.g.
+#
+#   "[$context.level]{context.bar.used}[/][base01]{context.bar.remaining}[/]"
+bar_width = 10
+bar_used = "━"
+bar_remaining = "─"
 
 # ---------------------------------------------------------------------------
 # Subagent statusline
@@ -210,6 +220,8 @@ danger_at = 86.0
 #   context.used_pct                 percent     23%     (of size - reserved)
 #   context.remaining_pct            percent     77%
 #   context.level                    level       good, caution, or danger
+#   context.bar.used                 text        ━━
+#   context.bar.remaining            text        ────────
 #
 # Try it with a sample payload:
 #
@@ -232,3 +244,6 @@ segments = [
 reserved_tokens = 20000
 caution_at = 76.0
 danger_at = 86.0
+bar_width = 10
+bar_used = "━"
+bar_remaining = "─"

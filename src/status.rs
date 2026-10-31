@@ -119,6 +119,9 @@ pub struct ContextStatus {
     /// Percentages as reported by Claude Code, without the reserve.
     pub reported_used_pct: Option<f64>,
     pub reported_remaining_pct: Option<f64>,
+    /// The used and remaining parts of a `bar_width`-cell progress bar.
+    pub bar_used: String,
+    pub bar_remaining: String,
 }
 
 #[derive(Debug, Default)]
@@ -360,6 +363,7 @@ impl ContextStatus {
     fn from_tokens(size: u64, used_tokens: u64, config: &ContextConfig) -> Self {
         let effective = size.saturating_sub(config.reserved_tokens).max(1);
         let used_pct = (used_tokens as f64 / effective as f64 * 100.0).clamp(0.0, 100.0);
+        let (bar_used, bar_remaining) = bar(used_pct, config);
 
         Self {
             size,
@@ -371,8 +375,26 @@ impl ContextStatus {
             level: level_for(used_pct, config),
             reported_used_pct: None,
             reported_remaining_pct: None,
+            bar_used,
+            bar_remaining,
         }
     }
+}
+
+/// Splits a `bar_width`-cell bar into its used and remaining parts, rounding
+/// to the nearest cell.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "used_pct is clamped to 0-100, so the product fits in a u8"
+)]
+fn bar(used_pct: f64, config: &ContextConfig) -> (String, String) {
+    let width = usize::from(config.bar_width);
+    let used = ((used_pct / 100.0 * f64::from(config.bar_width)).round() as usize).min(width);
+    (
+        config.bar_used.repeat(used),
+        config.bar_remaining.repeat(width - used),
+    )
 }
 
 fn level_for(used_pct: f64, config: &ContextConfig) -> Level {
@@ -519,6 +541,26 @@ mod tests {
         });
         let ctx = ContextStatus::new(&w, &no_reserve());
         assert_eq!(ctx.map(|c| c.used_tokens), Some(6_000));
+    }
+
+    #[test]
+    fn context_bar_rounds_to_nearest_cell() {
+        let config = ContextConfig {
+            bar_width: 4,
+            bar_used: "#".into(),
+            bar_remaining: ".".into(),
+            ..no_reserve()
+        };
+        let bar = |used| {
+            let ctx = ContextStatus::from_tokens(100, used, &config);
+            format!("{}{}", ctx.bar_used, ctx.bar_remaining)
+        };
+        assert_eq!(bar(0), "....");
+        assert_eq!(bar(12), "....");
+        assert_eq!(bar(13), "#...");
+        assert_eq!(bar(50), "##..");
+        assert_eq!(bar(100), "####");
+        assert_eq!(bar(500), "####");
     }
 
     #[test]
