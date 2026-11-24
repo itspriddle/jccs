@@ -3,7 +3,7 @@
 
 use std::fmt;
 
-use crate::status::{ContextStatus, Level, RateWindow, Status, SubagentStatus};
+use crate::status::{Level, RateWindow, Status};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -93,54 +93,6 @@ pub const NAMES: &[&str] = &[
     RATE_SEVEN_DAY[4],
     RATE_SEVEN_DAY[5],
     RATE_SEVEN_DAY[6],
-    CONTEXT[0],
-    CONTEXT[1],
-    CONTEXT[2],
-    CONTEXT[3],
-    CONTEXT[4],
-    CONTEXT[5],
-    CONTEXT[6],
-    CONTEXT[7],
-    CONTEXT[8],
-    CONTEXT[9],
-    CONTEXT[10],
-    "context.reported_used_pct",
-    "context.reported_remaining_pct",
-    "git.branch",
-    "git.owner",
-    "git.repo",
-    "git.pr.number",
-    "git.pr.url",
-    "workspace.project_dir",
-    "workspace.project_name",
-];
-
-/// Every name [`SubagentStatus::vars`] can produce, in output order.
-pub const SUBAGENT_NAMES: &[&str] = &[
-    "agent.name",
-    "agent.type",
-    "agent.description",
-    "agent.status",
-    "agent.elapsed",
-    "model.display_name",
-    "model.family",
-    "model.version",
-    CONTEXT[0],
-    CONTEXT[1],
-    CONTEXT[2],
-    CONTEXT[3],
-    CONTEXT[4],
-    CONTEXT[5],
-    CONTEXT[6],
-    CONTEXT[7],
-    CONTEXT[8],
-    CONTEXT[9],
-    CONTEXT[10],
-];
-
-/// Context names shared by the main and subagent statuslines, in output
-/// order.
-const CONTEXT: [&str; 11] = [
     "context.size",
     "context.size_short",
     "context.1m_tokens",
@@ -152,6 +104,15 @@ const CONTEXT: [&str; 11] = [
     "context.level",
     "context.bar.used",
     "context.bar.remaining",
+    "context.reported_used_pct",
+    "context.reported_remaining_pct",
+    "git.branch",
+    "git.owner",
+    "git.repo",
+    "git.pr.number",
+    "git.pr.url",
+    "workspace.project_dir",
+    "workspace.project_name",
 ];
 
 pub fn lookup<'a>(vars: &'a Vars, name: &str) -> Option<&'a Value> {
@@ -197,7 +158,29 @@ impl Status {
         }
 
         if let Some(c) = &self.context {
-            push_context(&mut push, c);
+            push("context.size", Some(Value::Int(c.size)));
+            push("context.size_short", Some(Value::Tokens(c.size)));
+            push("context.1m_tokens", Some(Value::Bool(c.million_tokens)));
+            push(
+                "context.reserved_tokens",
+                Some(Value::Int(c.reserved_tokens)),
+            );
+            push("context.used_tokens", Some(Value::Int(c.used_tokens)));
+            push(
+                "context.used_tokens_short",
+                Some(Value::Tokens(c.used_tokens)),
+            );
+            push("context.used_pct", Some(Value::Percent(c.used_pct)));
+            push(
+                "context.remaining_pct",
+                Some(Value::Percent(c.remaining_pct)),
+            );
+            push("context.level", Some(Value::Level(c.level)));
+            push("context.bar.used", Some(Value::Text(c.bar_used.clone())));
+            push(
+                "context.bar.remaining",
+                Some(Value::Text(c.bar_remaining.clone())),
+            );
             push(
                 "context.reported_used_pct",
                 c.reported_used_pct.map(Value::Percent),
@@ -227,67 +210,6 @@ impl Status {
 
         vars
     }
-}
-
-impl SubagentStatus {
-    pub fn vars(&self) -> Vars {
-        let mut vars = Vars::new();
-        let mut push = |name, value: Option<Value>| {
-            if let Some(value) = value {
-                vars.push((name, value));
-            }
-        };
-
-        push("agent.name", self.name.clone().map(Value::Text));
-        push("agent.type", self.agent_type.clone().map(Value::Text));
-        push(
-            "agent.description",
-            self.description.clone().map(Value::Text),
-        );
-        push("agent.status", self.status.clone().map(Value::Text));
-        push("agent.elapsed", self.elapsed.map(Value::Duration));
-
-        let model = &self.model;
-        push(
-            "model.display_name",
-            model.display_name.clone().map(Value::Text),
-        );
-        push("model.family", model.family.clone().map(Value::Text));
-        push("model.version", model.version.clone().map(Value::Text));
-
-        if let Some(c) = &self.context {
-            push_context(&mut push, c);
-        }
-
-        vars
-    }
-}
-
-fn push_context(push: &mut impl FnMut(&'static str, Option<Value>), c: &ContextStatus) {
-    let [
-        size,
-        size_short,
-        million_tokens,
-        reserved_tokens,
-        used_tokens,
-        used_tokens_short,
-        used_pct,
-        remaining_pct,
-        level,
-        bar_used,
-        bar_remaining,
-    ] = CONTEXT;
-    push(size, Some(Value::Int(c.size)));
-    push(size_short, Some(Value::Tokens(c.size)));
-    push(million_tokens, Some(Value::Bool(c.million_tokens)));
-    push(reserved_tokens, Some(Value::Int(c.reserved_tokens)));
-    push(used_tokens, Some(Value::Int(c.used_tokens)));
-    push(used_tokens_short, Some(Value::Tokens(c.used_tokens)));
-    push(used_pct, Some(Value::Percent(c.used_pct)));
-    push(remaining_pct, Some(Value::Percent(c.remaining_pct)));
-    push(level, Some(Value::Level(c.level)));
-    push(bar_used, Some(Value::Text(c.bar_used.clone())));
-    push(bar_remaining, Some(Value::Text(c.bar_remaining.clone())));
 }
 
 /// Variable names for one rate-limit window, in output order.
@@ -335,7 +257,7 @@ fn push_rate(push: &mut impl FnMut(&'static str, Option<Value>), names: RateName
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::status::{GitStatus, ModelStatus, WorkspaceStatus};
+    use crate::status::{ContextStatus, GitStatus, ModelStatus, WorkspaceStatus};
 
     #[test]
     fn formats_durations() {
@@ -451,40 +373,8 @@ mod tests {
     }
 
     #[test]
-    fn subagent_names_match_fully_populated_status() {
-        let status = SubagentStatus {
-            name: Some("Explore".into()),
-            agent_type: Some("Explore".into()),
-            description: Some("map the auth flow".into()),
-            status: Some("running".into()),
-            elapsed: Some(90),
-            model: ModelStatus {
-                display_name: Some("Opus 5".into()),
-                family: Some("Opus".into()),
-                version: Some("5".into()),
-                ..ModelStatus::default()
-            },
-            context: Some(ContextStatus {
-                size: 1,
-                million_tokens: false,
-                reserved_tokens: 0,
-                used_tokens: 1,
-                used_pct: 1.0,
-                remaining_pct: 99.0,
-                level: Level::Good,
-                reported_used_pct: None,
-                reported_remaining_pct: None,
-                bar_used: String::new(),
-                bar_remaining: "─".into(),
-            }),
-        };
-        let names: Vec<_> = status.vars().into_iter().map(|(n, _)| n).collect();
-        assert_eq!(names, SUBAGENT_NAMES);
-    }
-
-    #[test]
     fn omits_missing_values() {
-        assert_eq!(Status::default().vars(), Vars::new());
-        assert_eq!(SubagentStatus::default().vars(), Vars::new());
+        let vars = Status::default().vars();
+        assert_eq!(vars, Vars::new());
     }
 }
